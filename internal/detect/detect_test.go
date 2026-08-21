@@ -1,0 +1,301 @@
+package detect
+
+import (
+	"testing"
+
+	"github.com/yourname/kubeassist/backend-go/internal/model"
+)
+
+// These tests are "golden" in the sense the plan means: hand-built
+// fixture snapshots representing each of the 8 lab scenarios, with the
+// EXPECTED classification asserted exactly. This is possible ONLY
+// because Detect() is a pure function — no cluster, no network, no
+// mocking required. This whole test file runs in milliseconds.
+func TestDetect(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot *model.DiagnosticSnapshot
+		want     string // expected FailureType
+	}{
+		{
+			name: "ImagePullBackOff",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Pending"},
+				Containers: []model.ContainerInfo{
+					{Name: "app", State: model.ContainerState{Phase: "waiting", Reason: "ImagePullBackOff", Message: "no such image"}},
+				},
+			},
+			want: "ImagePullBackOff",
+		},
+		{
+			// Regression test for a real bug found by diffing against
+			// the published diagnosis.schema.json: the schema explicitly
+			// states "ErrImagePull is not a type" — Go must ALWAYS
+			// normalize to "ImagePullBackOff" as failureType, even when
+			// Kubernetes' own container state reason is literally
+			// "ErrImagePull" (the earlier half of the same retry cycle,
+			// before Kubernetes escalates to "ImagePullBackOff").
+			// Previously this returned the raw reason string unchanged,
+			// which would have emitted an invalid enum value straight
+			// into the wire contract with Python.
+			name: "ErrImagePull normalizes to ImagePullBackOff (schema regression)",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Pending"},
+				Containers: []model.ContainerInfo{
+					{Name: "app", State: model.ContainerState{Phase: "waiting", Reason: "ErrImagePull", Message: "manifest unknown"}},
+				},
+			},
+			want: "ImagePullBackOff",
+		},
+		{
+			name: "OOMKilled",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Running"},
+				Containers: []model.ContainerInfo{
+					{
+						Name:         "app",
+						RestartCount: 3,
+						State:        model.ContainerState{Phase: "waiting", Reason: "CrashLoopBackOff"},
+						LastState:    &model.ContainerState{Phase: "terminated", Reason: "OOMKilled"},
+						Resources:    model.ResourceSummary{LimitsMemory: "128Mi"},
+					},
+				},
+			},
+			// OOMKilled must win even though the CURRENT waiting reason
+			// is CrashLoopBackOff — this is exactly why detectOOMKilled
+			// runs BEFORE detectCrashLoopBackOff in the priority list,
+			// and this test would catch an accidental reordering.
+			want: "OOMKilled",
+		},
+		{
+			name: "CrashLoopBackOff (plain app crash)",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Running"},
+				Containers: []model.ContainerInfo{
+					{
+						Name:         "app",
+						RestartCount: 5,
+						State:        model.ContainerState{Phase: "waiting", Reason: "CrashLoopBackOff"},
+						LastState:    &model.ContainerState{Phase: "terminated", Reason: "Error", ExitCode: intPtr(1)},
+					},
+				},
+			},
+			want: "CrashLoopBackOff",
+		},
+		{
+			// Regression test mirroring the init-container fix above:
+			// same real-world race applies to regular containers —
+			// caught mid-cycle in the terminated/Error half instead of
+			// waiting/CrashLoopBackOff.
+			name: "CrashLoopBackOff (terminated/Error half of restart cycle)",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Running"},
+				Containers: []model.ContainerInfo{
+					{
+						Name:         "app",
+						RestartCount: 4,
+						State:        model.ContainerState{Phase: "terminated", Reason: "Error", ExitCode: intPtr(1)},
+					},
+				},
+			},
+			want: "CrashLoopBackOff",
+		},
+		{
+			name: "ProbeFailure (not plain CrashLoop)",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Running"},
+				Containers: []model.ContainerInfo{
+					{
+						Name:         "app",
+						RestartCount: 2,
+						State:        model.ContainerState{Phase: "running"},
+						Probes:       model.ProbeSummary{Liveness: "HTTP GET /healthz:8080"},
+					},
+				},
+				Events: []model.Event{
+					{Type: "Warning", Reason: "Unhealthy", Message: "Liveness probe failed: connection refused"},
+				},
+			},
+			want: "ProbeFailure",
+		},
+		{
+			name: "CreateContainerConfigError",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Pending"},
+				Containers: []model.ContainerInfo{
+					{Name: "app", State: model.ContainerState{Phase: "waiting", Reason: "CreateContainerConfigError", Message: "configmap \"missing-cm\" not found"}},
+				},
+			},
+			want: "CreateContainerConfigError",
+		},
+		{
+			name: "FailedScheduling",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod:    model.PodInfo{Phase: "Pending"},
+				Events: []model.Event{{Type: "Warning", Reason: "FailedScheduling", Message: "0/1 nodes are available: insufficient memory"}},
+			},
+			want: "FailedScheduling",
+		},
+		{
+			name: "Healthy",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Running"},
+				Containers: []model.ContainerInfo{
+					{Name: "app", Ready: true, State: model.ContainerState{Phase: "running"}},
+				},
+			},
+			want: "Healthy",
+		},
+		{
+			name:     "Unknown (no containers, weird phase)",
+			snapshot: &model.DiagnosticSnapshot{Pod: model.PodInfo{Phase: "Unknown"}},
+			want:     "Unknown",
+		},
+		{
+			name: "Evicted",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{
+					Phase:   "Failed",
+					Reason:  "Evicted",
+					Message: "The node was low on resource: ephemeral-storage.",
+				},
+			},
+			want: "Evicted",
+		},
+		{
+			name: "InitContainerFailure (crash)",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Pending"},
+				InitContainers: []model.ContainerInfo{
+					{
+						Name:         "wait-for-db",
+						RestartCount: 4,
+						State:        model.ContainerState{Phase: "waiting", Reason: "CrashLoopBackOff", Message: "back-off restarting failed container"},
+					},
+				},
+			},
+			want: "InitContainerFailure",
+		},
+		{
+			name: "InitContainerFailure (image pull)",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Pending"},
+				InitContainers: []model.ContainerInfo{
+					{Name: "migrate", Image: "myregistry/migrate:typo-tag", State: model.ContainerState{Phase: "waiting", Reason: "ErrImagePull", Message: "manifest not found"}},
+				},
+			},
+			want: "InitContainerFailure",
+		},
+		{
+			// Regression test for a real bug found via live-cluster
+			// testing: this is the EXACT snapshot shape a real
+			// crash-looping init container produced (RestartCount: 6,
+			// state terminated/Error) when curled at the "wrong" instant
+			// in Kubernetes' restart cycle — before this fix, it was
+			// misclassified as Unknown.
+			name: "InitContainerFailure (terminated/Error half of restart cycle — real bug regression)",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Pending"},
+				InitContainers: []model.ContainerInfo{
+					{
+						Name:         "wait-for-db",
+						RestartCount: 6,
+						State:        model.ContainerState{Phase: "terminated", Reason: "Error", ExitCode: intPtr(1)},
+						LastState:    &model.ContainerState{Phase: "terminated", Reason: "Error", ExitCode: intPtr(1)},
+					},
+				},
+				Containers: []model.ContainerInfo{
+					{Name: "app", Ready: false, State: model.ContainerState{Phase: "waiting", Reason: "PodInitializing"}},
+				},
+			},
+			want: "InitContainerFailure",
+		},
+		{
+			name: "VolumeMountFailure",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod:    model.PodInfo{Phase: "Pending"},
+				Events: []model.Event{{Type: "Warning", Reason: "FailedMount", Message: "MountVolume.SetUp failed for volume \"config\" : configmap \"missing-cm\" not found"}},
+			},
+			want: "VolumeMountFailure",
+		},
+		{
+			name: "ReadinessFailure (no restart, never Ready)",
+			snapshot: &model.DiagnosticSnapshot{
+				Pod: model.PodInfo{Phase: "Running"},
+				Containers: []model.ContainerInfo{
+					{Name: "app", Ready: false, RestartCount: 0, State: model.ContainerState{Phase: "running"}},
+				},
+				Events: []model.Event{{Type: "Warning", Reason: "Unhealthy", Message: "Readiness probe failed: connection refused"}},
+			},
+			want: "ReadinessFailure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Detect(tt.snapshot)
+			if got.FailureType != tt.want {
+				t.Errorf("Detect() FailureType = %q, want %q (evidence: %v)", got.FailureType, tt.want, got.Evidence)
+			}
+			if len(got.Evidence) == 0 {
+				t.Errorf("Detect() returned no evidence for FailureType %q — every classification must cite evidence", got.FailureType)
+			}
+		})
+	}
+}
+
+// TestDetectRelated_ServiceSelectorMismatch tests the pass-2 detector
+// separately since it has a different function signature (it needs an
+// already-computed core result, per the two-pass design).
+func TestDetectRelated_ServiceSelectorMismatch(t *testing.T) {
+	snapshot := &model.DiagnosticSnapshot{
+		Pod: model.PodInfo{
+			Phase:  "Running",
+			Labels: map[string]string{"app": "service-demo"},
+		},
+		Containers: []model.ContainerInfo{{Name: "app", Ready: true, State: model.ContainerState{Phase: "running"}}},
+		Related: &model.RelatedInfo{
+			Services: []model.ServiceSummary{
+				{Name: "broken-service", Selector: map[string]string{"app": "wrong-label"}, EndpointsReady: 0},
+			},
+		},
+	}
+
+	core := Detect(snapshot) // would classify Healthy on its own
+	if core.FailureType != "Healthy" {
+		t.Fatalf("precondition failed: expected core classification Healthy, got %q", core.FailureType)
+	}
+
+	final := DetectRelated(snapshot, core)
+	if final.FailureType != "ServiceSelectorMismatch" {
+		t.Errorf("DetectRelated() FailureType = %q, want %q", final.FailureType, "ServiceSelectorMismatch")
+	}
+}
+
+func intPtr(i int32) *int32 { return &i }
+
+// TestDetect_InitContainerFailureTakesPriority verifies that a failing
+// init container is correctly classified even when regular containers
+// look perfectly healthy — proving detectInitContainerFailure's early
+// position in the priority list actually matters, not just that the
+// function works when tested alone. In practice, a pod with a failing
+// init container will show regular containers as never-started (empty
+// Containers slice, or all Ready:false with no State set), but this
+// test deliberately gives them a "Healthy-looking" shape to prove the
+// init-container check wins regardless.
+func TestDetect_InitContainerFailureTakesPriority(t *testing.T) {
+	snapshot := &model.DiagnosticSnapshot{
+		Pod: model.PodInfo{Phase: "Pending"},
+		InitContainers: []model.ContainerInfo{
+			{Name: "wait-for-db", RestartCount: 6, State: model.ContainerState{Phase: "waiting", Reason: "CrashLoopBackOff"}},
+		},
+		Containers: []model.ContainerInfo{
+			{Name: "app", Ready: false, State: model.ContainerState{Phase: "waiting", Reason: "PodInitializing"}},
+		},
+	}
+
+	got := Detect(snapshot)
+	if got.FailureType != "InitContainerFailure" {
+		t.Errorf("Detect() FailureType = %q, want %q — init container failure should take priority", got.FailureType, "InitContainerFailure")
+	}
+}

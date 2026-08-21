@@ -1,0 +1,17 @@
+# Init container always exits 1, so it never lets the main container
+# start. Tests detect.detectInitContainerFailure.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-container-failure-test
+  labels:
+    app: init-container-failure-test
+spec:
+  initContainers:
+    - name: wait-for-db
+      image: busybox:1.36
+      command: ["sh", "-c", "echo 'checking database...'; sleep 2; echo 'fatal: database unreachable'; exit 1"]
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]

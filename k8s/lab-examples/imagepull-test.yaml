@@ -1,0 +1,23 @@
+# References a tag that doesn't exist on the real busybox image, so the
+# pull genuinely fails against Docker Hub (not a made-up registry —
+# using a real registry with a bad tag gives an authentic
+# ErrImagePull -> ImagePullBackOff transition, same as a real typo would).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: imagepull-test
+  labels:
+    app: imagepull-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: imagepull-test
+  template:
+    metadata:
+      labels:
+        app: imagepull-test
+    spec:
+      containers:
+        - name: app
+          image: busybox:this-tag-does-not-exist-9999
