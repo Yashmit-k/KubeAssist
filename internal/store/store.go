@@ -26,7 +26,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // driver registration via side-effect import — see below
 
-	"github.com/yourname/kubeassist/backend-go/internal/model"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
 // Store wraps a *sql.DB connection pool.

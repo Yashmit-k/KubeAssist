@@ -12,7 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/yourname/kubeassist/backend-go/internal/model"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
 // Hub tracks every currently-connected agent (one per customer cluster)

@@ -16,7 +16,7 @@
 // we never ask the customer to open anything.
 package tunnel
 
-import "github.com/yourname/kubeassist/backend-go/internal/model"
+import "github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 
 // JobRequest is what the relay sends DOWN the tunnel to a connected
 // agent — "go collect evidence for this pod."

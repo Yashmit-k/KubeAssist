@@ -3,7 +3,7 @@ package detect
 import (
 	"testing"
 
-	"github.com/yourname/kubeassist/backend-go/internal/model"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
 // These tests are "golden" in the sense the plan means: hand-built

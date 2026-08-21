@@ -13,13 +13,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yourname/kubeassist/backend-go/internal/ai"
-	"github.com/yourname/kubeassist/backend-go/internal/api"
-	"github.com/yourname/kubeassist/backend-go/internal/collector"
-	"github.com/yourname/kubeassist/backend-go/internal/config"
-	"github.com/yourname/kubeassist/backend-go/internal/k8s"
-	"github.com/yourname/kubeassist/backend-go/internal/store"
-	"github.com/yourname/kubeassist/backend-go/internal/tunnel"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/ai"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/api"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/collector"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/config"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/k8s"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/store"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/tunnel"
 )
 
 func main() {

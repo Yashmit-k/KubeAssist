@@ -20,10 +20,10 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/yourname/kubeassist/backend-go/internal/collector"
-	"github.com/yourname/kubeassist/backend-go/internal/k8s"
-	"github.com/yourname/kubeassist/backend-go/internal/redact"
-	"github.com/yourname/kubeassist/backend-go/internal/tunnel"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/collector"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/k8s"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/redact"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/tunnel"
 )
 
 func main() {

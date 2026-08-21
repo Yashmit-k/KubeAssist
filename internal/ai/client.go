@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yourname/kubeassist/backend-go/internal/model"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
 // Client wraps an http.Client with the RAG service's base URL, auth, and

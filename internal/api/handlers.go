@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourname/kubeassist/backend-go/internal/ai"
-	"github.com/yourname/kubeassist/backend-go/internal/collector"
-	"github.com/yourname/kubeassist/backend-go/internal/detect"
-	"github.com/yourname/kubeassist/backend-go/internal/model"
-	"github.com/yourname/kubeassist/backend-go/internal/redact"
-	"github.com/yourname/kubeassist/backend-go/internal/store"
-	"github.com/yourname/kubeassist/backend-go/internal/tunnel"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/ai"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/collector"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/detect"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/redact"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/store"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/tunnel"
 )
 
 // Server holds every dependency the HTTP handlers need. Store, AIClient,

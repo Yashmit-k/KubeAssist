@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yourname/kubeassist/backend-go/internal/model"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
 func TestSnapshot_RedactsLogSecrets(t *testing.T) {

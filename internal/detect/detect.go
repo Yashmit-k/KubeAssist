@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yourname/kubeassist/backend-go/internal/model"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
 // Detect runs every classifier in priority order and returns the first

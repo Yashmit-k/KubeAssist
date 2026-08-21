@@ -29,7 +29,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/yourname/kubeassist/backend-go/internal/model"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
 // Collector wraps a Kubernetes clientset and knows how to build
