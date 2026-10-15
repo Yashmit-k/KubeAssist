@@ -51,43 +51,71 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 }
 
-// Snapshot redacts sensitive content from a DiagnosticSnapshot IN PLACE
-// and returns it for convenient chaining. We mutate in place (rather
-// than returning a deep copy) because by the time redact runs, the
-// collector's local copy of the snapshot is about to be sent onward —
-// there's no other reader relying on the unredacted version afterward,
-// so a copy would just be wasted allocation.
+// extraPatterns cover common credential formats that don't follow the
+// key=value shape above.
+var extraPatterns = []*regexp.Regexp{
+	// JWTs (three base64url segments, header starting "eyJ").
+	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
+	// GitHub, Slack, Stripe/OpenAI-style and Google API keys.
+	regexp.MustCompile(`\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b`),
+	regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}\b`),
+	regexp.MustCompile(`\b(sk|rk|pk)[-_](live|test|proj|ant)?[-_]?[A-Za-z0-9_-]{16,}\b`),
+	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),
+}
+
+// urlCredentials matches user:password@ in connection URLs
+// (postgres://app:hunter2@db:5432/x) and keeps the scheme and user.
+var urlCredentials = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]+):[^\s@/]+@`)
+
+// Snapshot redacts every free-text field of a snapshot IN PLACE and
+// returns it for convenience. It must run before a snapshot leaves Go
+// (to the AI service, to Postgres, or up the agent tunnel).
 func Snapshot(s *model.DiagnosticSnapshot) *model.DiagnosticSnapshot {
-	s.Logs.Current = redactText(s.Logs.Current)
+	s.Logs.Current = Text(s.Logs.Current)
 	if s.Logs.Previous != nil {
-		redacted := redactText(*s.Logs.Previous)
+		redacted := Text(*s.Logs.Previous)
 		s.Logs.Previous = &redacted
 	}
-
+	s.Logs.UnavailableReason = Text(s.Logs.UnavailableReason)
+	s.Pod.Message = Text(s.Pod.Message)
 	for i := range s.Events {
-		s.Events[i].Message = redactText(s.Events[i].Message)
+		s.Events[i].Message = Text(s.Events[i].Message)
 	}
-
-	for i := range s.Containers {
-		s.Containers[i].State.Message = redactText(s.Containers[i].State.Message)
-		if s.Containers[i].LastState != nil {
-			s.Containers[i].LastState.Message = redactText(s.Containers[i].LastState.Message)
-		}
+	for i := range s.Conditions {
+		s.Conditions[i].Message = Text(s.Conditions[i].Message)
 	}
+	redactContainers(s.Containers)
+	redactContainers(s.InitContainers)
+	s.UserQuestion = Text(s.UserQuestion)
 
-	// Pod annotations frequently carry things like
-	// "kubectl.kubernetes.io/last-applied-configuration" which can
-	// embed an entire prior Secret manifest if someone `kubectl apply`'d
-	// a Secret with client-side apply. We drop this specific annotation
-	// entirely rather than trying to regex-scrub structured YAML/JSON
-	// inside a string — too easy to miss a field that way.
+	// last-applied-configuration embeds the whole manifest, including
+	// any literal env values — drop it rather than try to scrub it.
 	delete(s.Pod.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
-
+	for k, v := range s.Pod.Annotations {
+		s.Pod.Annotations[k] = Text(v)
+	}
 	return s
 }
 
-func redactText(text string) string {
+func redactContainers(cs []model.ContainerInfo) {
+	for i := range cs {
+		cs[i].State.Message = Text(cs[i].State.Message)
+		if cs[i].LastState != nil {
+			cs[i].LastState.Message = Text(cs[i].LastState.Message)
+		}
+	}
+}
+
+// Text redacts one free-text string.
+func Text(text string) string {
+	if text == "" {
+		return text
+	}
+	text = urlCredentials.ReplaceAllString(text, "${1}:"+maskedValue+"@")
 	for _, p := range patterns {
+		text = p.ReplaceAllString(text, maskedValue)
+	}
+	for _, p := range extraPatterns {
 		text = p.ReplaceAllString(text, maskedValue)
 	}
 	return text

@@ -103,9 +103,13 @@ func (c *Client) Troubleshoot(ctx context.Context, snapshot *model.DiagnosticSna
 // (429 or 5xx), as distinct from a plain network/parsing error.
 type retryableHTTPError struct {
 	StatusCode int
+	Cause      error // transport error when StatusCode is 0
 }
 
 func (e *retryableHTTPError) Error() string {
+	if e.StatusCode == 0 && e.Cause != nil {
+		return fmt.Sprintf("AI service unreachable: %v", e.Cause)
+	}
 	return fmt.Sprintf("received retryable status %d", e.StatusCode)
 }
 
@@ -141,7 +145,7 @@ func (c *Client) doRequest(ctx context.Context, body []byte) (*model.DiagnosisRe
 		// TIMEOUT) — these are also worth retrying once, since they're
 		// often transient (service still starting up in docker-compose,
 		// for instance).
-		return nil, &retryableHTTPError{StatusCode: 0}
+		return nil, &retryableHTTPError{StatusCode: 0, Cause: err}
 	}
 	defer resp.Body.Close()
 
@@ -166,4 +170,29 @@ func (c *Client) doRequest(ctx context.Context, body []byte) (*model.DiagnosisRe
 	}
 
 	return &diagnosis, nil
+}
+
+// Health calls the AI service's GET /health and reports whether it is
+// up and its retrieval index is loaded. Used by the backend's own
+// /api/health so the UI can show whether full diagnoses are available.
+func (c *Client) Health(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/health", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ai: health returned status %d", resp.StatusCode)
+	}
+	var body struct {
+		IndexReady *bool `json:"indexReady"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err == nil && body.IndexReady != nil && !*body.IndexReady {
+		return fmt.Errorf("ai: retrieval index not ready")
+	}
+	return nil
 }

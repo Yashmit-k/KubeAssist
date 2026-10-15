@@ -83,3 +83,40 @@ func TestSnapshot_DropsLastAppliedConfigAnnotation(t *testing.T) {
 		t.Error("unrelated annotation should have been preserved")
 	}
 }
+
+func TestText_ExtendedPatterns(t *testing.T) {
+	cases := map[string]string{
+		"jwt":          "auth eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U ok",
+		"github token": "cloning with ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+		"slack token":  "posting via xoxb-1234567890-abcdefghij",
+		"url creds":    "dial postgres://app:hunter2secret@db:5432/orders failed",
+		"openai key":   "using sk-proj-abcdefghijklmnopqrstuv1234",
+	}
+	secrets := map[string]string{
+		"jwt": "dozjgNryP4J3jVmNHl0w5N", "github token": "ghp_abcdef", "slack token": "xoxb-1234567890",
+		"url creds": "hunter2secret", "openai key": "abcdefghijklmnopqrstuv1234",
+	}
+	for name, in := range cases {
+		if out := Text(in); strings.Contains(out, secrets[name]) {
+			t.Errorf("%s survived redaction: %q", name, out)
+		}
+	}
+	// The username and host in a URL are useful evidence and should stay.
+	if out := Text(cases["url creds"]); !strings.Contains(out, "postgres://app:") || !strings.Contains(out, "@db:5432") {
+		t.Errorf("url redaction removed too much: %q", out)
+	}
+}
+
+func TestSnapshot_RedactsInitContainersConditionsAndQuestion(t *testing.T) {
+	s := &model.DiagnosticSnapshot{
+		InitContainers: []model.ContainerInfo{{State: model.ContainerState{Message: "token=abc123secret"}}},
+		Conditions:     []model.Condition{{Message: "password: letmein"}},
+		UserQuestion:   "is api_key=zzz-secret-zzz the problem?",
+	}
+	Snapshot(s)
+	for _, v := range []string{s.InitContainers[0].State.Message, s.Conditions[0].Message, s.UserQuestion} {
+		if strings.Contains(v, "abc123secret") || strings.Contains(v, "letmein") || strings.Contains(v, "zzz-secret-zzz") {
+			t.Errorf("secret survived: %q", v)
+		}
+	}
+}

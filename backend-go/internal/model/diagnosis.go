@@ -75,9 +75,24 @@ type TroubleshootRequest struct {
 // GET /api/investigations/{id}.
 type Investigation struct {
 	ID        string             `json:"id"`
+	ClusterID string             `json:"clusterId"`
 	Namespace string             `json:"namespace"`
 	PodName   string             `json:"podName"`
 	Snapshot  DiagnosticSnapshot `json:"snapshot"`
 	Diagnosis DiagnosisResponse  `json:"diagnosis"`
 	CreatedAt string             `json:"createdAt"`
+}
+
+// InvestigationSummary is one row of the history list — enough to render
+// a table without shipping every stored snapshot.
+type InvestigationSummary struct {
+	ID              string  `json:"id"`
+	ClusterID       string  `json:"clusterId"`
+	Namespace       string  `json:"namespace"`
+	PodName         string  `json:"podName"`
+	FailureType     string  `json:"failureType"`
+	IssueSummary    string  `json:"issueSummary"`
+	ConfidenceScore float64 `json:"confidenceScore"`
+	Mode            string  `json:"mode"`
+	CreatedAt       string  `json:"createdAt"`
 }

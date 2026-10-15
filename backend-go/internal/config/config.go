@@ -101,6 +101,16 @@ type Config struct {
 	// default.
 	CORSAllowedOrigins []string
 
+	// AdminToken, when set, is required (as a Bearer token) to list ALL
+	// registered clusters via GET /api/clusters. When unset, that listing
+	// is only available in local mode — in a public multi-tenant
+	// deployment, one customer must not be able to enumerate the others.
+	AdminToken string
+
+	// DBConnectTimeout bounds how long startup waits for Postgres to
+	// accept connections (compose start ordering, serverless cold starts).
+	DBConnectTimeout time.Duration
+
 	// Timeouts — the plan specifies concrete values per external call:
 	// Go→K8s 5-10s, Go→AI 60-90s, overall troubleshoot 120s. We make
 	// these configurable (with the plan's defaults baked in) rather than
@@ -139,6 +149,7 @@ func Load() (*Config, error) {
 		RelayEnabled:     getEnvOrDefault("ENABLE_RELAY", "false") == "true",
 		RelayPublicURL:   getEnvOrDefault("RELAY_PUBLIC_URL", "ws://localhost:8080/agent/connect"),
 		LocalModeEnabled: getEnvOrDefault("ENABLE_LOCAL_MODE", "true") == "true",
+		AdminToken:       os.Getenv("ADMIN_TOKEN"),
 		CORSAllowedOrigins: parseOrigins(getEnvOrDefault(
 			"CORS_ALLOWED_ORIGINS",
 			"http://localhost:5173,http://localhost:3000",
@@ -157,6 +168,11 @@ func Load() (*Config, error) {
 	cfg.TroubleshootTimeout, err = getDurationOrDefault("TROUBLESHOOT_TIMEOUT", 120*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("config: invalid TROUBLESHOOT_TIMEOUT: %w", err)
+	}
+
+	cfg.DBConnectTimeout, err = getDurationOrDefault("DB_CONNECT_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("config: invalid DB_CONNECT_TIMEOUT: %w", err)
 	}
 
 	// We deliberately do NOT require DatabaseURL or AIAuthToken to be

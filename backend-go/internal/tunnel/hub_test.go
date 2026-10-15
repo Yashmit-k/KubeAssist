@@ -1,6 +1,19 @@
 package tunnel
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
+)
 
 // TestNewHub_NilTokensDoesNotPanic is a regression test for a real bug:
 // NewHub(nil) used to leave Hub.tokens as a literal nil map, and the
@@ -119,4 +132,161 @@ func TestHub_ListClusters_NeverExposesTokens(t *testing.T) {
 	// would need to consciously remove this test rather than silently
 	// leaking tokens through a listing endpoint.
 	_ = token
+}
+
+// fakeStore is an in-memory ClusterStore.
+type fakeStore struct {
+	mu   sync.Mutex
+	rows map[string]string
+}
+
+func (f *fakeStore) SaveCluster(_ context.Context, id, hash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows[id] = hash
+	return nil
+}
+func (f *fakeStore) DeleteCluster(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.rows, id)
+	return nil
+}
+func (f *fakeStore) LoadClusters(context.Context) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]string{}
+	for k, v := range f.rows {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// TestHub_RegistrationsSurviveRestart: a second Hub built from the same
+// store accepts the token issued by the first — and the store only ever
+// saw a hash, never the token.
+func TestHub_RegistrationsSurviveRestart(t *testing.T) {
+	st := &fakeStore{rows: map[string]string{}}
+	h1 := NewHub(nil)
+	if err := h1.AttachStore(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	token, err := h1.RegisterCluster("prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.rows["prod"] == token || st.rows["prod"] != HashToken(token) {
+		t.Fatal("store must hold the token hash, not the token")
+	}
+
+	h2 := NewHub(nil)
+	if err := h2.AttachStore(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	if !h2.VerifyToken("prod", token) {
+		t.Error("token should verify after restart")
+	}
+	if err := h2.RevokeCluster("prod"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.rows["prod"]; ok || h2.VerifyToken("prod", token) {
+		t.Error("revoked cluster must be gone from hub and store")
+	}
+}
+
+func TestHub_RejectsInvalidClusterIDs(t *testing.T) {
+	hub := NewHub(nil)
+	for _, id := range []string{"UPPER", "has space", "-leading", "trailing-", "a_b", strings.Repeat("a", 64)} {
+		if _, err := hub.RegisterCluster(id); err == nil {
+			t.Errorf("RegisterCluster(%q) should fail", id)
+		}
+	}
+}
+
+// TestHub_EndToEndOverWebSocket runs a real relay and a minimal agent
+// over a real WebSocket: header auth, job kinds, concurrent jobs,
+// NotFound mapping and disconnect handling.
+func TestHub_EndToEndOverWebSocket(t *testing.T) {
+	hub := NewHub(nil)
+	token, _ := hub.RegisterCluster("edge")
+	srv := httptest.NewServer(http.HandlerFunc(hub.ServeAgentConnect))
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	// Wrong token is refused at the handshake.
+	bad := http.Header{"Authorization": {"Bearer nope"}, "X-Cluster-Id": {"edge"}}
+	if _, resp, err := websocket.DefaultDialer.Dial(wsURL, bad); err == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bad token should get 401, got err=%v", err)
+	}
+
+	hdr := http.Header{"Authorization": {"Bearer " + token}, "X-Cluster-Id": {"edge"}}
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wmu sync.Mutex
+	go func() { // the fake agent
+		for {
+			var req JobRequest
+			if err := conn.ReadJSON(&req); err != nil {
+				return
+			}
+			resp := JobResponse{JobID: req.JobID}
+			switch req.Kind {
+			case JobListNamespaces:
+				resp.Namespaces = []string{"default", "shop"}
+			case JobSnapshot:
+				if req.Pod == "missing" {
+					resp.Error, resp.NotFound = `pods "missing" not found`, true
+				} else {
+					resp.Snapshot = &model.DiagnosticSnapshot{Pod: model.PodInfo{Name: req.Pod, Namespace: req.Namespace}}
+				}
+			}
+			wmu.Lock()
+			_ = conn.WriteJSON(resp)
+			wmu.Unlock()
+		}
+	}()
+
+	waitFor(t, func() bool { return hub.IsConnected("edge") })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			snap, err := hub.Dispatch(ctx, "edge", JobRequest{Namespace: "shop", Pod: "api"})
+			if err != nil || snap.Pod.Name != "api" {
+				t.Errorf("Dispatch: %v %+v", err, snap)
+			}
+		}()
+	}
+	wg.Wait()
+
+	resp, err := hub.Do(ctx, "edge", JobRequest{Kind: JobListNamespaces})
+	if err != nil || len(resp.Namespaces) != 2 {
+		t.Errorf("namespaces: %v %+v", err, resp)
+	}
+	if _, err := hub.Dispatch(ctx, "edge", JobRequest{Namespace: "shop", Pod: "missing"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("want ErrNotFound, got %v", err)
+	}
+
+	conn.Close()
+	waitFor(t, func() bool { return !hub.IsConnected("edge") })
+	if _, err := hub.Do(ctx, "edge", JobRequest{Kind: JobListNamespaces}); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("want ErrNotConnected after disconnect, got %v", err)
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

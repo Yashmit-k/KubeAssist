@@ -1,14 +1,15 @@
-// Package main is the entrypoint for the KubeAssist Go backend. Its ONLY
+// Package main is the entrypoint for the KubeAssist Go backend. Its only
 // job is construction and wiring: read config, build each dependency in
 // the right order, inject them into the API server, and start listening.
-// No business logic lives here — that discipline is what keeps every
-// other package independently testable.
+// No business logic lives here.
 package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -28,39 +29,49 @@ func main() {
 		log.Fatalf("config error: %v", err)
 	}
 
-	clientset, err := k8s.NewClientset(cfg.Kubeconfig, cfg.KubeContext)
-	if err != nil {
-		log.Fatalf("k8s client error: %v", err)
-	}
-
-	serverVersion := ""
-	if v, err := clientset.Discovery().ServerVersion(); err == nil {
-		serverVersion = v.GitVersion
+	// The local cluster is only needed in local mode. A public
+	// multi-tenant deployment (ENABLE_LOCAL_MODE=false) runs with no
+	// kubeconfig or in-cluster credentials at all.
+	var (
+		coll          *collector.Collector
+		clusterName   = cfg.KubeContext
+		serverVersion string
+	)
+	if cfg.LocalModeEnabled {
+		clientset, err := k8s.NewClientset(cfg.Kubeconfig, cfg.KubeContext)
+		if err != nil {
+			log.Fatalf("k8s client error (set ENABLE_LOCAL_MODE=false to run without a local cluster): %v", err)
+		}
+		if v, err := clientset.Discovery().ServerVersion(); err == nil {
+			serverVersion = v.GitVersion
+		} else {
+			log.Printf("warning: could not fetch cluster server version: %v", err)
+		}
+		if clusterName == "" {
+			clusterName = "local"
+		}
+		coll = collector.New(clientset, clusterName, serverVersion)
+		log.Printf("LOCAL MODE ENABLED — cluster %q (%s) is reachable via the API. Set ENABLE_LOCAL_MODE=false for a public multi-tenant deployment.", clusterName, serverVersion)
 	} else {
-		log.Printf("warning: could not fetch cluster server version: %v", err)
+		log.Println("local mode disabled — only registered remote clusters are reachable via /api/remote/...")
 	}
 
-	coll := collector.New(clientset, cfg.KubeContext, serverVersion)
-
-	// Store and AI client are OPTIONAL — this is the degraded-mode
-	// behavior required by the plan (Section 12: "works without LLM").
-	// We only construct them if their required config is present, and
-	// the Server struct in internal/api is written to handle a nil
-	// pointer for either one.
+	// Store and AI client are OPTIONAL; the API degrades without them.
 	var st *store.Store
 	if cfg.DatabaseURL != "" {
-		st, err = store.New(cfg.DatabaseURL)
+		st, err = store.New(cfg.DatabaseURL, cfg.DBConnectTimeout)
 		if err != nil {
 			log.Fatalf("store error: %v", err)
 		}
 		defer st.Close()
 
-		migrateCtx, cancel := context.WithTimeout(context.Background(), cfg.K8sTimeout)
-		if err := st.Migrate(migrateCtx); err != nil {
-			cancel()
+		migrateCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = st.Migrate(migrateCtx)
+		cancel()
+		if err != nil {
 			log.Fatalf("store migration error: %v", err)
 		}
-		cancel()
+		log.Println("investigation history enabled (Postgres)")
 	} else {
 		log.Println("DATABASE_URL not set — investigation history disabled")
 	}
@@ -68,22 +79,34 @@ func main() {
 	var aiClient *ai.Client
 	if cfg.AIBaseURL != "" && cfg.AIAuthToken != "" {
 		aiClient = ai.New(cfg.AIBaseURL, cfg.AIAuthToken, cfg.AITimeout)
+		log.Printf("AI service: %s", cfg.AIBaseURL)
 	} else {
 		log.Println("AI_BASE_URL/AI_AUTH_TOKEN not fully configured — running in detector-only mode")
 	}
 
-	// The relay hub is built whenever ENABLE_RELAY=true — deliberately
-	// NOT gated on AgentTokens being non-empty anymore. A fresh
-	// deployment with zero pre-configured clusters still needs a live
-	// Hub to accept its FIRST self-serve registration via
-	// POST /api/clusters; gating construction on "already has tokens"
-	// would make that impossible.
+	// The relay hub is built whenever ENABLE_RELAY=true, even with zero
+	// pre-seeded clusters, so the first self-serve registration works.
 	var hub *tunnel.Hub
 	if cfg.RelayEnabled {
 		hub = tunnel.NewHub(cfg.AgentTokens)
-		log.Printf("remote-cluster relay enabled (%d pre-seeded cluster(s), self-serve registration open)", len(cfg.AgentTokens))
+		if st != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := hub.AttachStore(ctx, st)
+			cancel()
+			if err != nil {
+				log.Fatalf("relay: %v", err)
+			}
+			log.Println("remote-cluster registrations are persisted to Postgres")
+		} else {
+			log.Println("warning: relay enabled without DATABASE_URL — self-serve cluster registrations are lost on restart")
+		}
+		log.Printf("remote-cluster relay enabled (%d registered cluster(s)); agents dial %s", len(hub.ListClusters()), cfg.RelayPublicURL)
 	} else {
 		log.Println("ENABLE_RELAY not set — remote-cluster relay disabled")
+	}
+
+	if !cfg.LocalModeEnabled && hub == nil {
+		log.Println("warning: both local mode and the relay are disabled — the API can only serve /api/health")
 	}
 
 	server := &api.Server{
@@ -92,50 +115,39 @@ func main() {
 		AIClient:            aiClient,
 		Hub:                 hub,
 		TroubleshootTimeout: cfg.TroubleshootTimeout,
-		ClusterName:         cfg.KubeContext,
+		ClusterName:         clusterName,
 		ServerVersion:       serverVersion,
 		RelayPublicURL:      cfg.RelayPublicURL,
+		AgentImage:          os.Getenv("AGENT_IMAGE"),
 		LocalModeEnabled:    cfg.LocalModeEnabled,
+		AdminToken:          cfg.AdminToken,
 	}
 
-	if cfg.LocalModeEnabled {
-		log.Println("LOCAL MODE ENABLED — this server's own configured cluster is reachable via the public API. Set ENABLE_LOCAL_MODE=false for a public multi-tenant deployment.")
-	} else {
-		log.Println("local mode disabled — this server's own cluster is NOT exposed; only registered remote clusters via /api/remote/... are reachable")
-	}
-
-	// Wrap the router with CORS support so a browser-based frontend on a
-	// different origin (Vite dev server, deployed React app, etc.) can
-	// call this API. server.NewRouter() itself is completely unchanged
-	// — this just layers a middleware around its output, per
-	// internal/api/cors.go.
-	corsHandler := api.NewCORSMiddleware(cfg.CORSAllowedOrigins)(server.NewRouter())
+	handler := api.NewCORSMiddleware(cfg.CORSAllowedOrigins)(api.RequestLogger(server.NewRouter()))
 
 	httpServer := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: corsHandler,
+		Addr:              ":" + cfg.Port,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		// No WriteTimeout: SSE streams and the agent WebSocket are
+		// long-lived; per-request work is bounded by context timeouts.
+		IdleTimeout: 120 * time.Second,
 	}
 
-	// GRACEFUL SHUTDOWN: signal.NotifyContext gives us a context that's
-	// automatically cancelled when the process receives SIGINT (Ctrl+C)
-	// or SIGTERM (what Kubernetes sends a Pod before killing it during a
-	// rolling update or scale-down). Handling this properly matters a
-	// lot once this runs IN a cluster: without it, Kubernetes sends
-	// SIGTERM, waits out a grace period (default 30s), then SIGKILLs the
-	// process — any in-flight request gets dropped mid-response. With
-	// graceful shutdown, we stop accepting NEW connections immediately
-	// but let IN-FLIGHT requests finish (up to a bounded timeout).
+	// Graceful shutdown on SIGINT/SIGTERM (what Kubernetes sends before
+	// killing a pod): stop accepting connections, let in-flight requests
+	// finish within a bounded window.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	go func() {
-		log.Printf("KubeAssist backend listening on %s", httpServer.Addr)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("KubeAssist backend %s listening on %s", api.Version, httpServer.Addr)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}
 	}()
 
-	<-ctx.Done() // blocks here until SIGINT/SIGTERM
+	<-ctx.Done()
 	log.Println("shutdown signal received, draining in-flight requests...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
