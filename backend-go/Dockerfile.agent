@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 # The agent runs INSIDE customers' clusters, so it gets the same minimal
 # treatment: static binary, distroless, numeric non-root user (works with
-# runAsNonRoot and readOnlyRootFilesystem).
-FROM golang:1.26-bookworm AS build
+# runAsNonRoot and readOnlyRootFilesystem). Like the backend, it
+# cross-compiles on the builder's native platform.
+FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

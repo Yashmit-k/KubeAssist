@@ -1,13 +1,17 @@
 # syntax=docker/dockerfile:1
 # Multi-stage build: compile with the full Go toolchain, ship only the
 # static binary on distroless (no shell, no package manager, non-root).
-FROM golang:1.26-bookworm AS build
+# The build stage runs on the builder's own platform and cross-compiles
+# (GOOS/GOARCH), so multi-arch releases don't run Go under emulation.
+FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath \
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath \
     -ldflags "-s -w -X github.com/Yashmit-k/KubeAssist/backend-go/internal/api.Version=${VERSION}" \
     -o /out/server ./cmd/server
 
