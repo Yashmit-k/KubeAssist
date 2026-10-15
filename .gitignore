@@ -1,0 +1,31 @@
+# Go
+/backend-go/bin/
+*.test
+*.out
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+ai-service/data/index/*.npy
+ai-service/data/index/metadata.json
+ai-service/data/index/manifest.json
+
+# Node
+node_modules/
+frontend/dist/
+
+# Local env / secrets
+.env
+.env.local
+*.local.yaml
+.kube/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

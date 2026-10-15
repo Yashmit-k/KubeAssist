@@ -3,14 +3,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.routes import router
-from app.paths import FAISS_DIR
+from app.paths import INDEX_DIR
 from app.rag.index import build_index
 from app.state import retriever
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if not (FAISS_DIR / "vectors.npy").exists():
+    if not (INDEX_DIR / "vectors.npy").exists():
         build_index()
     retriever.load()
     yield

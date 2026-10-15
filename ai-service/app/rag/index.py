@@ -8,10 +8,12 @@ from typing import Any
 
 import numpy as np
 
-from app.paths import FAISS_DIR, RAW_DOCS_DIR
+from app.paths import INDEX_DIR, RAW_DOCS_DIR
 from app.rag.embed import VECTOR_DIM, embed_text
 
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.S)
+SECTION_RE = re.compile(r"^## +(.+)$", re.M)
+TAGS_LINE_RE = re.compile(r"^tags:\s*\[(.*?)\]\s*$", re.M)
 
 
 @dataclass
@@ -25,6 +27,10 @@ class Chunk:
     text: str
 
 
+def _parse_list(val: str) -> list[str]:
+    return [x.strip() for x in val.split(",") if x.strip()]
+
+
 def parse_markdown(path: Path) -> tuple[dict[str, Any], str]:
     raw = path.read_text(encoding="utf-8")
     m = FRONTMATTER_RE.match(raw)
@@ -35,42 +41,48 @@ def parse_markdown(path: Path) -> tuple[dict[str, Any], str]:
         if ":" not in line:
             continue
         key, val = line.split(":", 1)
-        key = key.strip()
-        val = val.strip()
+        key, val = key.strip(), val.strip()
         if val.startswith("[") and val.endswith("]"):
-            inner = val[1:-1].strip()
-            meta[key] = [x.strip() for x in inner.split(",") if x.strip()]
+            meta[key] = _parse_list(val[1:-1])
         else:
             meta[key] = val
     return meta, m.group(2).strip()
 
 
-def chunk_text(text: str, max_chars: int = 3200, overlap: int = 400) -> list[str]:
-    paras = [p.strip() for p in re.split(r"\n\n+", text) if p.strip()]
-    chunks: list[str] = []
-    buf = ""
-    for p in paras:
-        if buf and len(buf) + len(p) + 2 > max_chars:
-            chunks.append(buf.strip())
-            buf = buf[-overlap:] + "\n\n" + p
-        else:
-            buf = f"{buf}\n\n{p}" if buf else p
-    if buf.strip():
-        chunks.append(buf.strip())
-    return chunks or [text]
+def split_sections(body: str) -> list[tuple[str, list[str], str]]:
+    """Split a document on '## Heading' lines. Each section becomes one
+    chunk, so a citation points at a specific topic rather than a whole
+    page. A 'tags: [...]' line directly under a heading narrows that
+    section's failure tags. Text before the first heading (or a document
+    without headings) is a single 'overview' section."""
+    matches = list(SECTION_RE.finditer(body))
+    if not matches:
+        return [("overview", [], body.strip())]
+    out: list[tuple[str, list[str], str]] = []
+    preamble = body[: matches[0].start()].strip()
+    if preamble:
+        out.append(("overview", [], preamble))
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        text = body[m.end() : end].strip()
+        tags: list[str] = []
+        tm = TAGS_LINE_RE.match(text)
+        if tm:
+            tags = _parse_list(tm.group(1))
+            text = text[tm.end() :].strip()
+        if text:
+            out.append((m.group(1).strip(), tags, text))
+    return out
 
 
 def load_chunks(docs_dir: Path = RAW_DOCS_DIR) -> list[Chunk]:
     out: list[Chunk] = []
     for path in sorted(docs_dir.glob("*.md")):
         meta, body = parse_markdown(path)
-        tags = meta.get("failure_tags") or []
-        if isinstance(tags, str):
-            tags = [tags]
-        for i, piece in enumerate(chunk_text(body)):
-            section = str(meta.get("section", "body"))
-            if i:
-                section = f"{section}#{i + 1}"
+        doc_tags = meta.get("failure_tags") or []
+        if isinstance(doc_tags, str):
+            doc_tags = [doc_tags]
+        for section, sec_tags, text in split_sections(body):
             out.append(
                 Chunk(
                     title=str(meta.get("title", path.stem)),
@@ -78,18 +90,22 @@ def load_chunks(docs_dir: Path = RAW_DOCS_DIR) -> list[Chunk]:
                     section=section,
                     k8s_version=str(meta.get("k8s_version", "1.31")),
                     doc_type=str(meta.get("doc_type", "concept")),
-                    failure_tags=list(tags),
-                    text=piece,
+                    failure_tags=list(sec_tags or doc_tags),
+                    text=text,
                 )
             )
     return out
 
 
-def build_index(docs_dir: Path = RAW_DOCS_DIR, out_dir: Path = FAISS_DIR) -> int:
+def build_index(docs_dir: Path = RAW_DOCS_DIR, out_dir: Path = INDEX_DIR) -> int:
     chunks = load_chunks(docs_dir)
     if not chunks:
         raise RuntimeError(f"no markdown docs in {docs_dir}")
-    mat = np.stack([embed_text(c.text + " " + " ".join(c.failure_tags)) for c in chunks])
+    # Title and section are embedded with the text: headings carry a lot
+    # of the topical signal for short chunks.
+    mat = np.stack(
+        [embed_text(f"{c.title} {c.section} {c.text} {' '.join(c.failure_tags)}") for c in chunks]
+    )
     meta = [
         {
             "title": c.title,
@@ -106,7 +122,7 @@ def build_index(docs_dir: Path = RAW_DOCS_DIR, out_dir: Path = FAISS_DIR) -> int
     np.save(out_dir / "vectors.npy", mat)
     (out_dir / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     (out_dir / "manifest.json").write_text(
-        json.dumps({"dim": VECTOR_DIM, "count": len(chunks), "backend": "hashed-ip"}, indent=2),
+        json.dumps({"dim": VECTOR_DIM, "count": len(chunks), "backend": "hashed-ngram-ip"}, indent=2),
         encoding="utf-8",
     )
     return len(chunks)

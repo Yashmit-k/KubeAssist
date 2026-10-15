@@ -1,0 +1,9 @@
+**/.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+frontend/dist
+ai-service/data/index/*.npy
+.git
+.kube
+.env

@@ -1,15 +1,22 @@
 {
-  "note": "Original summaries for offline RAG MVP. Citations point at official kubernetes.io pages. See docs/rag/DOCS_LICENSE.md.",
+  "note": "Original summaries written for this project (not copies of upstream text). Each document cites the official kubernetes.io page it summarizes. See docs/ai/rag/DOCS_LICENSE.md.",
   "k8s_version": "1.31",
   "pages": [
     "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/",
+    "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/",
     "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/",
     "https://kubernetes.io/docs/concepts/containers/images/",
+    "https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/",
     "https://kubernetes.io/docs/tasks/configure-pod-container/assign-memory-resource/",
+    "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
+    "https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/",
     "https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/",
+    "https://kubernetes.io/docs/concepts/configuration/secret/",
     "https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/",
+    "https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/",
     "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/",
     "https://kubernetes.io/docs/concepts/storage/volumes/",
+    "https://kubernetes.io/docs/concepts/storage/persistent-volumes/",
     "https://kubernetes.io/docs/concepts/workloads/pods/init-containers/"
   ]
 }

@@ -1,12 +1,17 @@
 ---
 title: Volumes
 url: https://kubernetes.io/docs/concepts/storage/volumes/
-section: mount-failures
 k8s_version: 1.31
 doc_type: concept
 failure_tags: [VolumeMountFailure]
 ---
 
-FailedMount and FailedAttachVolume events mean a volume (PVC, ConfigMap, or Secret volume) could not attach or mount. The pod often remains Pending with no container start. Check PVC binding, storage class, and that volume names exist.
+## FailedMount and FailedAttachVolume
+tags: [VolumeMountFailure]
 
-This is not FailedScheduling even though the pod is Pending; mount events are the primary signal while still Pending.
+When a volume cannot be attached to the node or mounted into the pod, the pod stays in ContainerCreating and the kubelet emits FailedMount or FailedAttachVolume events naming the volume and the reason. No container has started, so there are no application logs.
+
+## Missing ConfigMap or Secret volumes
+tags: [VolumeMountFailure]
+
+A volume that references a ConfigMap or Secret that does not exist fails with a message that the object was not found. Create the object or correct the name; the kubelet retries the mount automatically.
