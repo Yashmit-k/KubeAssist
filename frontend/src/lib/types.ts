@@ -23,6 +23,16 @@ export type Health = {
   ai: "ok" | "unavailable" | "disabled";
   store: "ok" | "unavailable" | "disabled";
   features: string[];
+  /** Sign-in methods ("github", "dev"); empty when accounts are off. */
+  authProviders?: string[];
+};
+
+export type User = {
+  id: string;
+  provider: string;
+  login: string;
+  name?: string;
+  avatarUrl?: string;
 };
 
 export type ClusterInfo = { name: string; serverVersion: string };

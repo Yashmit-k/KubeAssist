@@ -39,10 +39,10 @@ Open **http://localhost:3000**, pick a pod in `kubeassist-lab`, click **Diagnose
 To try the multi-tenant agent flow against the same Kind cluster:
 
 ```bash
-make agent-kind  # builds the agent, loads it into Kind, registers "kind-dev", deploys it
+make agent-kind  # builds the agent, loads it into Kind, registers "kind-dev" as user "dev", deploys it
 ```
 
-Then add `kind-dev` with the printed token under **Connect cluster**. Or register a cluster from the UI, which hands you a ready-to-apply agent manifest.
+Then open **Connect cluster**, sign in as `dev` (the compose stack enables a password-less development sign-in), and `kind-dev` is listed. Or register a cluster from the UI, which hands you a ready-to-apply agent manifest. Set `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` in `.env` to try real GitHub sign-in.
 
 **Use a real LLM:** copy `.env.example` to `.env`, set `LLM_MOCK=false` and `LLM_API_KEY` (any OpenAI-compatible endpoint: OpenAI, OpenRouter, Groq, Azure, vLLM, or a keyless local Ollama with `LLM_REQUIRE_KEY=false`), then `make up-kind` again.
 
@@ -81,7 +81,14 @@ Go backend (environment variables):
 | `RELAY_PUBLIC_URL` | `ws://localhost:8080/agent/connect` | What agents dial (`wss://` in production) |
 | `AGENT_IMAGE` | `ghcr.io/yashmit-k/kubeassist-agent:latest` | Image in generated agent manifests |
 | `AGENT_TOKENS` | — | Pre-seeded `id:token,id2:token2` registrations |
-| `ADMIN_TOKEN` | — | Lets an operator list all clusters |
+| `ADMIN_TOKEN` | — | Operator credential: lists every cluster and reaches any of them |
+| `PUBLIC_URL` | `http://localhost:5173` | The UI's browser-facing origin (OAuth callback, redirects; https ⇒ Secure cookies) |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | — | "Sign in with GitHub" (accounts are on whenever the relay is) |
+| `AUTH_DEV_LOGIN` | `false` | Password-less sign-in as any username — development only, refused with an https `PUBLIC_URL` |
+| `SESSION_TTL` | `720h` | Session lifetime |
+| `MAX_CLUSTERS_PER_USER` | `10` | Registrations per account (`0` = unlimited) |
+| `RATE_LIMIT_REGISTER`, `RATE_LIMIT_TROUBLESHOOT`, `RATE_LIMIT_LOGIN` | `10/h`, `30/m`, `30/m` | Per user / per user-or-IP / per IP; `off` disables |
+| `TRUST_PROXY_HEADERS` | `false` | Key anonymous rate limits by `X-Forwarded-For` (only behind your own proxy) |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Browser origins when the UI is on another origin |
 | `K8S_TIMEOUT`, `AI_TIMEOUT`, `TROUBLESHOOT_TIMEOUT`, `DB_CONNECT_TIMEOUT` | `10s`, `90s`, `120s`, `30s` | Timeouts |
 
@@ -93,7 +100,8 @@ AI service: `AI_SHARED_TOKEN` (must equal the backend's `AI_AUTH_TOKEN`), `LLM_M
 - **Redaction before data leaves Go** — and, for remote clusters, before it leaves the customer's cluster.
 - **Commands are never executed.** Mutating commands are detected and flagged regardless of what the model says.
 - **Outbound-only agent** — customer clusters accept no inbound traffic; kube credentials never leave them.
-- **Per-cluster tokens** on every remote request (constant-time comparison, stored as SHA-256 hashes); history is scoped per cluster.
+- **Accounts and ownership** — remote clusters belong to the user who registered them (GitHub sign-in); every remote request is authorized by an HttpOnly, SameSite session cookie plus ownership, and another user's cluster looks like a nonexistent one. Agents authenticate separately with per-cluster tokens (stored as SHA-256 hashes, compared in constant time); history is scoped per cluster.
+- **Rate limits** on registration, troubleshoot and sign-in; a per-account cluster cap.
 - **`ENABLE_LOCAL_MODE=false`** removes the operator's own cluster from a public deployment entirely.
 
 ## Status
@@ -102,7 +110,7 @@ Verified live against Kind (Kubernetes v1.36): every lab scenario classifies cor
 
 Tested in CI: Go unit, schema-contract, WebSocket tunnel and Postgres integration tests; Python retrieval/pipeline/LLM-path tests (against a mocked OpenAI-compatible server); frontend type-check and tests.
 
-Not yet done: user accounts (registration is open self-serve; clusters are identified only by their tokens), live testing against a hosted LLM in this repo's CI, a Helm chart.
+Not yet done: email/magic-link sign-in and team sharing of clusters, live testing against a hosted LLM in this repo's CI, a Helm chart.
 
 ## Deployment
 

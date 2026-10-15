@@ -33,7 +33,7 @@ func openTestStore(t *testing.T) *Store {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `TRUNCATE investigations; TRUNCATE clusters;`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `TRUNCATE investigations, clusters, sessions, users;`); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -94,10 +94,17 @@ func TestStore_SaveGetListScopedByCluster(t *testing.T) {
 func TestStore_ClusterRegistrations(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	if err := s.SaveCluster(ctx, "prod", "hash-1"); err != nil {
+	owner, err := s.UpsertUser(ctx, model.User{Provider: "github", ProviderUserID: "1", Login: "alice"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveCluster(ctx, "prod", "hash-2"); err == nil {
+	if err := s.SaveCluster(ctx, "prod", "hash-1", owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveCluster(ctx, "seeded", "hash-s", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveCluster(ctx, "prod", "hash-2", ""); err == nil {
 		t.Error("duplicate cluster id must fail")
 	}
 	snap := model.DiagnosticSnapshot{SchemaVersion: "1.1.0"}
@@ -106,7 +113,7 @@ func TestStore_ClusterRegistrations(t *testing.T) {
 	}
 
 	all, err := s.LoadClusters(ctx)
-	if err != nil || all["prod"] != "hash-1" {
+	if err != nil || all["prod"].TokenHash != "hash-1" || all["prod"].OwnerID != owner.ID || all["seeded"].OwnerID != "" {
 		t.Fatalf("LoadClusters = %v, %v", all, err)
 	}
 	if err := s.DeleteCluster(ctx, "prod"); err != nil {
@@ -114,7 +121,48 @@ func TestStore_ClusterRegistrations(t *testing.T) {
 	}
 	all, _ = s.LoadClusters(ctx)
 	list, _ := s.List(ctx, "prod", "", 10)
-	if len(all) != 0 || len(list) != 0 {
+	if _, ok := all["prod"]; ok || len(list) != 0 {
 		t.Errorf("delete should remove registration and history: %v %v", all, list)
+	}
+}
+
+func TestStore_UsersAndSessions(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	u, err := s.UpsertUser(ctx, model.User{Provider: "github", ProviderUserID: "4242", Login: "octocat", Name: "Octo"})
+	if err != nil || u.ID == "" {
+		t.Fatalf("upsert: %+v %v", u, err)
+	}
+	// Same identity, renamed login -> same row, refreshed profile.
+	again, err := s.UpsertUser(ctx, model.User{Provider: "github", ProviderUserID: "4242", Login: "octo-renamed"})
+	if err != nil || again.ID != u.ID {
+		t.Fatalf("re-upsert should keep the ID: %+v %v", again, err)
+	}
+	other, _ := s.UpsertUser(ctx, model.User{Provider: "dev", ProviderUserID: "4242", Login: "4242"})
+	if other.ID == u.ID {
+		t.Error("identities are per provider")
+	}
+
+	if err := s.CreateSession(ctx, "live", u.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateSession(ctx, "expired", u.ID, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SessionUser(ctx, "live")
+	if err != nil || got == nil || got.ID != u.ID || got.Login != "octo-renamed" || got.ProviderUserID != "4242" {
+		t.Fatalf("SessionUser(live) = %+v, %v", got, err)
+	}
+	for _, h := range []string{"expired", "missing"} {
+		if got, err := s.SessionUser(ctx, h); got != nil || err != nil {
+			t.Errorf("SessionUser(%s) = %+v, %v; want nil, nil", h, got, err)
+		}
+	}
+	if err := s.DeleteSession(ctx, "live"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.SessionUser(ctx, "live"); got != nil {
+		t.Error("deleted session must not resolve")
 	}
 }

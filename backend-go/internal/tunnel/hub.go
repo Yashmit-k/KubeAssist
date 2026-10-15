@@ -44,14 +44,22 @@ var clusterIDPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`
 // ValidClusterID reports whether id is an acceptable cluster ID.
 func ValidClusterID(id string) bool { return clusterIDPattern.MatchString(id) }
 
+// StoredCluster is one persisted registration: the agent token's hash
+// and the ID of the user who owns the cluster ("" for clusters
+// pre-seeded through AGENT_TOKENS, which only an operator can reach).
+type StoredCluster struct {
+	TokenHash string
+	OwnerID   string
+}
+
 // ClusterStore persists cluster registrations so they survive a backend
 // restart. Only a SHA-256 hash of each token is stored — a leaked
 // database dump does not hand out working agent credentials.
 // internal/store implements this against Postgres.
 type ClusterStore interface {
-	SaveCluster(ctx context.Context, clusterID, tokenHash string) error
+	SaveCluster(ctx context.Context, clusterID, tokenHash, ownerID string) error
 	DeleteCluster(ctx context.Context, clusterID string) error
-	LoadClusters(ctx context.Context) (map[string]string, error)
+	LoadClusters(ctx context.Context) (map[string]StoredCluster, error)
 }
 
 // Hub tracks every currently-connected agent (one per customer cluster)
@@ -62,10 +70,10 @@ type Hub struct {
 	mu     sync.Mutex
 	agents map[string]*agentConn // keyed by ClusterID
 
-	// tokenHashes maps ClusterID -> hex(sha256(token)). Pre-seeded from
+	// clusters maps ClusterID -> token hash + owner. Pre-seeded from
 	// AGENT_TOKENS, loaded from the ClusterStore, and extended at runtime
 	// by RegisterCluster.
-	tokenHashes map[string]string
+	clusters map[string]StoredCluster
 
 	store    ClusterStore
 	upgrader websocket.Upgrader
@@ -89,13 +97,13 @@ type agentConn struct {
 // from AGENT_TOKENS), which may be nil when every cluster registers
 // dynamically via RegisterCluster.
 func NewHub(tokens map[string]string) *Hub {
-	hashes := make(map[string]string, len(tokens))
+	clusters := make(map[string]StoredCluster, len(tokens))
 	for id, tok := range tokens {
-		hashes[id] = HashToken(tok)
+		clusters[id] = StoredCluster{TokenHash: HashToken(tok)}
 	}
 	return &Hub{
-		agents:      make(map[string]*agentConn),
-		tokenHashes: hashes,
+		agents:   make(map[string]*agentConn),
+		clusters: clusters,
 		upgrader: websocket.Upgrader{
 			// Agents aren't browsers, so the browser same-origin check
 			// doesn't apply; the bearer token is the security boundary.
@@ -114,9 +122,9 @@ func (h *Hub) AttachStore(ctx context.Context, store ClusterStore) error {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for id, hash := range stored {
-		if _, seeded := h.tokenHashes[id]; !seeded {
-			h.tokenHashes[id] = hash
+	for id, c := range stored {
+		if _, seeded := h.clusters[id]; !seeded {
+			h.clusters[id] = c
 		}
 	}
 	h.store = store
@@ -330,11 +338,9 @@ func (h *Hub) IsConnected(clusterID string) bool {
 	return ok
 }
 
-// VerifyToken checks a caller-supplied token against clusterID's
-// registered token. The same secret serves double duty: it proves an
-// agent belongs to a cluster AND authorizes API callers to query that
-// cluster via /api/remote/{clusterId}/..., which is what stops one
-// customer reading another's cluster.
+// VerifyToken checks an agent's token against clusterID's registered
+// token. It authenticates AGENTS only: browser and API callers are
+// authorized by their login session and cluster ownership (see Owner).
 //
 // The comparison is constant-time over the hashes, closing the timing
 // side-channel a naive == would leave.
@@ -343,21 +349,38 @@ func (h *Hub) VerifyToken(clusterID, token string) bool {
 		return false
 	}
 	h.mu.Lock()
-	expected, ok := h.tokenHashes[clusterID]
+	c, ok := h.clusters[clusterID]
 	h.mu.Unlock()
-	if !ok || expected == "" {
+	if !ok || c.TokenHash == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(HashToken(token))) == 1
+	return subtle.ConstantTimeCompare([]byte(c.TokenHash), []byte(HashToken(token))) == 1
 }
 
-// RegisterCluster generates a fresh token for a new clusterID, persists
-// its hash if a store is attached, and returns the plaintext token —
-// the only time it is ever available.
+// Owner returns the user ID that owns clusterID ("" for operator-seeded
+// clusters) and whether the cluster is registered at all.
+func (h *Hub) Owner(clusterID string) (ownerID string, ok bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.clusters[clusterID]
+	return c.OwnerID, ok
+}
+
+// ErrAlreadyRegistered is returned when a cluster ID is taken.
+var ErrAlreadyRegistered = errors.New("cluster is already registered")
+
+// ErrTooManyClusters is returned when an owner is at their cluster limit.
+var ErrTooManyClusters = errors.New("cluster limit reached")
+
+// RegisterCluster generates a fresh token for a new clusterID owned by
+// ownerID, persists its hash if a store is attached, and returns the
+// plaintext token — the only time it is ever available. maxPerOwner > 0
+// caps how many clusters one owner may hold (checked under the same lock
+// as the insert, so concurrent registrations can't overshoot it).
 //
 // Re-registering an existing ID is refused: it would silently invalidate
 // the token a running agent holds. Rotation is RevokeCluster + register.
-func (h *Hub) RegisterCluster(clusterID string) (token string, err error) {
+func (h *Hub) RegisterCluster(clusterID, ownerID string, maxPerOwner int) (token string, err error) {
 	if clusterID == "" {
 		return "", fmt.Errorf("tunnel: clusterID must not be empty")
 	}
@@ -366,22 +389,26 @@ func (h *Hub) RegisterCluster(clusterID string) (token string, err error) {
 	}
 
 	h.mu.Lock()
-	if _, exists := h.tokenHashes[clusterID]; exists {
+	if _, exists := h.clusters[clusterID]; exists {
 		h.mu.Unlock()
-		return "", fmt.Errorf("tunnel: cluster %q is already registered", clusterID)
+		return "", fmt.Errorf("tunnel: cluster %q: %w", clusterID, ErrAlreadyRegistered)
+	}
+	if maxPerOwner > 0 && ownerID != "" && h.countOwnedLocked(ownerID) >= maxPerOwner {
+		h.mu.Unlock()
+		return "", fmt.Errorf("tunnel: %w (%d clusters per user)", ErrTooManyClusters, maxPerOwner)
 	}
 	token = newToken()
 	hash := HashToken(token)
-	h.tokenHashes[clusterID] = hash
+	h.clusters[clusterID] = StoredCluster{TokenHash: hash, OwnerID: ownerID}
 	store := h.store
 	h.mu.Unlock()
 
 	if store != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := store.SaveCluster(ctx, clusterID, hash); err != nil {
+		if err := store.SaveCluster(ctx, clusterID, hash, ownerID); err != nil {
 			h.mu.Lock()
-			delete(h.tokenHashes, clusterID)
+			delete(h.clusters, clusterID)
 			h.mu.Unlock()
 			return "", fmt.Errorf("tunnel: persisting cluster %q: %w", clusterID, err)
 		}
@@ -392,11 +419,11 @@ func (h *Hub) RegisterCluster(clusterID string) (token string, err error) {
 // RevokeCluster removes a registration and disconnects its agent.
 func (h *Hub) RevokeCluster(clusterID string) error {
 	h.mu.Lock()
-	if _, ok := h.tokenHashes[clusterID]; !ok {
+	if _, ok := h.clusters[clusterID]; !ok {
 		h.mu.Unlock()
 		return fmt.Errorf("tunnel: cluster %q is not registered", clusterID)
 	}
-	delete(h.tokenHashes, clusterID)
+	delete(h.clusters, clusterID)
 	ac := h.agents[clusterID]
 	delete(h.agents, clusterID)
 	store := h.store
@@ -436,12 +463,36 @@ func (h *Hub) Status(clusterID string) ClusterStatus {
 }
 
 // ListClusters returns every registered cluster with its connection
-// status — never the tokens (or their hashes).
+// status — never the tokens (or their hashes). Operator view.
 func (h *Hub) ListClusters() []ClusterStatus {
+	return h.listClusters(func(StoredCluster) bool { return true })
+}
+
+// ListClustersOwnedBy returns the clusters ownerID registered.
+func (h *Hub) ListClustersOwnedBy(ownerID string) []ClusterStatus {
+	if ownerID == "" {
+		return []ClusterStatus{}
+	}
+	return h.listClusters(func(c StoredCluster) bool { return c.OwnerID == ownerID })
+}
+
+func (h *Hub) countOwnedLocked(ownerID string) int {
+	n := 0
+	for _, c := range h.clusters {
+		if c.OwnerID == ownerID {
+			n++
+		}
+	}
+	return n
+}
+
+func (h *Hub) listClusters(keep func(StoredCluster) bool) []ClusterStatus {
 	h.mu.Lock()
-	ids := make([]string, 0, len(h.tokenHashes))
-	for id := range h.tokenHashes {
-		ids = append(ids, id)
+	ids := make([]string, 0, len(h.clusters))
+	for id, c := range h.clusters {
+		if keep(c) {
+			ids = append(ids, id)
+		}
 	}
 	h.mu.Unlock()
 	sort.Strings(ids)

@@ -3,7 +3,7 @@
 There are two shapes of deployment:
 
 - **Single operator** — the backend diagnoses one cluster it runs next to (local mode). Simplest; run it inside that cluster or anywhere with a kubeconfig.
-- **Multi-tenant SaaS** — `ENABLE_LOCAL_MODE=false`, `ENABLE_RELAY=true`. Users register clusters in the UI and install the agent; nothing of the operator's own cluster is exposed.
+- **Multi-tenant SaaS** — `ENABLE_LOCAL_MODE=false`, `ENABLE_RELAY=true`. Users sign in (GitHub), register clusters in the UI and install the agent; each cluster is visible only to its owner, and nothing of the operator's own cluster is exposed.
 
 ## Components
 
@@ -32,18 +32,50 @@ AI_AUTH_TOKEN=<long random secret>                     # same value as AI_SHARED
 AGENT_IMAGE=ghcr.io/<owner>/kubeassist-agent:v1.0.0    # pin a version in generated manifests
 CORS_ALLOWED_ORIGINS=https://app.example.com           # only if the UI is on a different origin
 ADMIN_TOKEN=<optional, for operators>
+
+# Accounts
+PUBLIC_URL=https://app.example.com                     # the UI's origin; https => Secure __Host- cookies
+GITHUB_CLIENT_ID=<GitHub OAuth App client ID>
+GITHUB_CLIENT_SECRET=<GitHub OAuth App client secret>
+# AUTH_DEV_LOGIN must stay unset (it is refused with an https PUBLIC_URL anyway)
+
+# Abuse limits (defaults shown; "off" disables)
+MAX_CLUSTERS_PER_USER=10
+RATE_LIMIT_REGISTER=10/h                               # per user
+RATE_LIMIT_TROUBLESHOOT=30/m                           # per user (per IP when anonymous)
+RATE_LIMIT_LOGIN=30/m                                  # per IP
+TRUST_PROXY_HEADERS=true                               # only if your proxy sets X-Forwarded-For
 ```
+
+GitHub sign-in: create an OAuth App (GitHub → Settings → Developer settings →
+OAuth Apps) with **Homepage URL** `https://app.example.com` and **Authorization
+callback URL** `https://app.example.com/api/auth/github/callback`. No scopes are
+requested; KubeAssist reads only the public profile.
+
+The UI and API must be **same-site** (the same origin, or subdomains of one
+registrable domain such as `app.example.com` + `api.example.com`): the session
+cookie is `SameSite=Lax`, so a UI on an unrelated domain can't send it. Serving
+both from one origin (the nginx frontend image proxies `/api`) is simplest and
+needs no CORS at all. Users, sessions and cluster ownership live in Postgres;
+without `DATABASE_URL` they are kept in memory and lost on restart.
+
+Rate limits are per backend process. With several replicas each enforces its own
+budget; put a shared limiter at the edge if you need strict global limits.
 
 AI service environment: `AI_SHARED_TOKEN`, `LLM_MOCK=false`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`.
 
 TLS: terminate at the platform's load balancer or with Caddy (`reverse_proxy backend:8080` handles WebSocket upgrades and SSE without extra config). If you use nginx, disable buffering for `/api/` and pass `Upgrade` headers for `/agent/` — see [`frontend/nginx.conf.template`](../frontend/nginx.conf.template).
 
-Frontend hosted separately: build with `VITE_API_BASE_URL=https://api.example.com` and list that UI origin in `CORS_ALLOWED_ORIGINS`.
+Frontend hosted separately: build with `VITE_API_BASE_URL=https://api.example.com`, list that UI origin in `CORS_ALLOWED_ORIGINS` (it then also gets `Access-Control-Allow-Credentials`), keep it same-site with the API, and set `PUBLIC_URL` to the origin that serves `/api/auth/github/callback`.
 
-## Known limitations before opening to strangers
+Upgrading from a version without accounts: existing registrations have no owner
+and are reachable only with `ADMIN_TOKEN`. Revoke them
+(`DELETE /api/clusters/{id}` with the admin token) and let users re-register.
 
-- No user accounts: anyone can register a cluster ID; access is controlled solely by each cluster's token (held in the user's browser). Add authentication before treating this as a multi-user product.
-- No rate limiting on `POST /api/clusters` or troubleshoot; put it behind your platform's rate limiter.
+## Known limitations
+
+- GitHub is the only production sign-in provider (no email magic link yet), and there is no account deletion or team sharing — a cluster has exactly one owner.
+- Rate limits are in-process (see above).
 - Agent images are not signed; consider cosign signing in `release.yml` and publishing digests.
 
 ## Single operator, in-cluster

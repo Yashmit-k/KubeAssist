@@ -209,62 +209,8 @@ func TestLocalModeDisabled_RoutesAbsent(t *testing.T) {
 			t.Errorf("%s should not exist with local mode off, got %d", path, rec.Code)
 		}
 	}
-	if rec := do(t, h, "GET", "/api/clusters", ""); rec.Code != http.StatusForbidden {
-		t.Errorf("cluster listing must be closed in multi-tenant mode, got %d", rec.Code)
-	}
-}
-
-func TestRemoteRoutes_RequireClusterToken(t *testing.T) {
-	hub := tunnel.NewHub(nil)
-	tokA, _ := hub.RegisterCluster("cluster-a")
-	_, _ = hub.RegisterCluster("cluster-b")
-	s := &Server{Hub: hub, TroubleshootTimeout: time.Second}
-	h := s.NewRouter()
-
-	if rec := do(t, h, "GET", "/api/remote/cluster-a/status", ""); rec.Code != http.StatusUnauthorized {
-		t.Errorf("no token: want 401, got %d", rec.Code)
-	}
-	if rec := do(t, h, "GET", "/api/remote/cluster-b/pods", "", "Authorization", "Bearer "+tokA); rec.Code != http.StatusUnauthorized {
-		t.Errorf("cross-cluster token: want 401, got %d", rec.Code)
-	}
-	rec := do(t, h, "GET", "/api/remote/cluster-a/status", "", "Authorization", "Bearer "+tokA)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"connected":false`) {
-		t.Errorf("own token: got %d %s", rec.Code, rec.Body)
-	}
-	// Valid token but no agent connected -> 503, not a hang.
-	rec = do(t, h, "GET", "/api/remote/cluster-a/namespaces", "", "Authorization", "Bearer "+tokA)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("disconnected agent: want 503, got %d %s", rec.Code, rec.Body)
-	}
-}
-
-func TestRegisterCluster_ValidationAndManifest(t *testing.T) {
-	s := &Server{Hub: tunnel.NewHub(nil), RelayPublicURL: "wss://relay.example/agent/connect"}
-	h := s.NewRouter()
-
-	for _, bad := range []string{`{}`, `{"clusterId":"Bad_ID"}`, `{"clusterId":"local"}`, `not json`} {
-		if rec := do(t, h, "POST", "/api/clusters", bad); rec.Code != http.StatusBadRequest {
-			t.Errorf("%s: want 400, got %d", bad, rec.Code)
-		}
-	}
-	rec := do(t, h, "POST", "/api/clusters", `{"clusterId":"prod-eu"}`)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("register: %d %s", rec.Code, rec.Body)
-	}
-	var reg registerClusterResponse
-	_ = json.Unmarshal(rec.Body.Bytes(), &reg)
-	if reg.Token == "" || !strings.Contains(reg.Manifest, reg.Token) || !strings.Contains(reg.Manifest, "wss://relay.example/agent/connect") {
-		t.Errorf("manifest should embed token and relay URL")
-	}
-	if rec := do(t, h, "POST", "/api/clusters", `{"clusterId":"prod-eu"}`); rec.Code != http.StatusConflict {
-		t.Errorf("duplicate: want 409, got %d", rec.Code)
-	}
-	// Revoke with the cluster's own token.
-	if rec := do(t, h, "DELETE", "/api/clusters/prod-eu", "", "Authorization", "Bearer "+reg.Token); rec.Code != http.StatusNoContent {
-		t.Errorf("revoke: want 204, got %d %s", rec.Code, rec.Body)
-	}
-	if rec := do(t, h, "GET", "/api/remote/prod-eu/status", "", "Authorization", "Bearer "+reg.Token); rec.Code != http.StatusUnauthorized {
-		t.Errorf("revoked token must stop working, got %d", rec.Code)
+	if rec := do(t, h, "GET", "/api/clusters", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("cluster listing needs a session, got %d", rec.Code)
 	}
 }
 

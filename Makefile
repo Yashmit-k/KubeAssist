@@ -2,6 +2,8 @@
 SHELL := /bin/bash
 KIND_CLUSTER ?= kubeassist-dev
 API ?= http://localhost:8080
+# Account `make agent-kind` registers clusters under (dev sign-in).
+KUBEASSIST_USER ?= dev
 COMPOSE_KIND := docker compose -f docker-compose.yml -f docker-compose.kind.yml
 
 .PHONY: help
@@ -55,7 +57,7 @@ logs: ## Tail backend + AI logs
 .PHONY: dev-backend dev-ai dev-web
 dev-backend: ## Go backend on :8080 against your current kubeconfig (needs postgres+ai from `docker compose up -d postgres ai-service`)
 	cd backend-go && KUBECONFIG=$${KUBECONFIG:-$$HOME/.kube/config} KUBE_CONTEXT=$${KUBE_CONTEXT:-kind-$(KIND_CLUSTER)} \
-	  ENABLE_RELAY=true AI_BASE_URL=http://localhost:8000 AI_AUTH_TOKEN=$${AI_SHARED_TOKEN:-dev-shared-token-change-me} \
+	  ENABLE_RELAY=true AUTH_DEV_LOGIN=true PUBLIC_URL=http://localhost:5173 AI_BASE_URL=http://localhost:8000 AI_AUTH_TOKEN=$${AI_SHARED_TOKEN:-dev-shared-token-change-me} \
 	  DATABASE_URL=$${DATABASE_URL:-postgres://kubeassist:kubeassist_dev_password@localhost:5432/kubeassist?sslmode=disable} \
 	  go run ./cmd/server
 
@@ -77,14 +79,18 @@ lab: ## Deploy the broken lab workloads (namespace kubeassist-lab)
 lab-clean: ## Remove the lab workloads
 	kubectl --context kind-$(KIND_CLUSTER) delete namespace kubeassist-lab --ignore-not-found
 
-agent-kind: ## Build the agent, load it into Kind, register "kind-dev" and deploy it
+agent-kind: ## Build the agent, load it into Kind, register "kind-dev" (as $(KUBEASSIST_USER)) and deploy it
 	docker build -f backend-go/Dockerfile.agent -t kubeassist-agent:dev backend-go
 	kind load docker-image kubeassist-agent:dev --name $(KIND_CLUSTER)
-	@resp=$$(curl -fsS -X POST $(API)/api/clusters -H 'Content-Type: application/json' -d '{"clusterId":"kind-dev"}') || { \
-	  echo "registration failed (already registered? revoke it in the UI or with DELETE /api/clusters/kind-dev)"; exit 1; }; \
+	@jar=$$(mktemp); trap 'rm -f "$$jar"' EXIT; \
+	curl -fsS -c "$$jar" -X POST $(API)/api/auth/dev-login -H 'Content-Type: application/json' -d '{"login":"$(KUBEASSIST_USER)"}' >/dev/null || { \
+	  echo "dev sign-in failed (the backend needs AUTH_DEV_LOGIN=true, as in docker-compose.yml)"; exit 1; }; \
+	resp=$$(curl -fsS -b "$$jar" -X POST $(API)/api/clusters -H 'Content-Type: application/json' -d '{"clusterId":"kind-dev"}') || { \
+	  echo "registration failed (already registered? revoke it in the UI as $(KUBEASSIST_USER), or DELETE /api/clusters/kind-dev)"; exit 1; }; \
 	token=$$(echo "$$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'); \
 	kubectl --context kind-$(KIND_CLUSTER) apply -f deploy/agent/kind-dev.yaml; \
 	kubectl --context kind-$(KIND_CLUSTER) -n kubeassist create secret generic kubeassist-agent-token \
 	  --from-literal=AGENT_TOKEN=$$token --dry-run=client -o yaml | kubectl --context kind-$(KIND_CLUSTER) apply -f -; \
 	kubectl --context kind-$(KIND_CLUSTER) -n kubeassist rollout restart deployment/kubeassist-agent; \
-	echo; echo "Cluster: kind-dev"; echo "Token:   $$token"; echo "Add it in the UI under Connect cluster → Already registered."
+	echo; echo "Cluster kind-dev registered to account \"$(KUBEASSIST_USER)\"."; \
+	echo "Open http://localhost:3000/connect and sign in as \"$(KUBEASSIST_USER)\" to use it."

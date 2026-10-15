@@ -10,6 +10,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -107,6 +108,40 @@ type Config struct {
 	// deployment, one customer must not be able to enumerate the others.
 	AdminToken string
 
+	// PublicURL is the browser-facing origin of the UI (PUBLIC_URL), e.g.
+	// https://app.example.com. OAuth callbacks and post-login redirects
+	// are built from it, and an https:// value makes session cookies
+	// Secure. Defaults to the Vite dev server.
+	PublicURL string
+
+	// GitHubClientID / GitHubClientSecret enable "Sign in with GitHub"
+	// (a GitHub OAuth App whose callback URL is
+	// PUBLIC_URL/api/auth/github/callback).
+	GitHubClientID     string
+	GitHubClientSecret string
+
+	// AuthDevLogin enables a password-less "sign in as any username"
+	// endpoint for local development and CI (AUTH_DEV_LOGIN=true). It is
+	// refused when PUBLIC_URL is https.
+	AuthDevLogin bool
+
+	// SessionTTL is how long a browser session lasts.
+	SessionTTL time.Duration
+
+	// MaxClustersPerUser caps registrations per account (0 = unlimited).
+	MaxClustersPerUser int
+
+	// Rate limits as "N/unit" (e.g. "10/h"; "off" disables): cluster
+	// registration per user, troubleshoot per user (or IP for local
+	// mode), and sign-in per IP.
+	RateLimitRegister     string
+	RateLimitTroubleshoot string
+	RateLimitLogin        string
+
+	// TrustProxyHeaders keys anonymous rate limits by X-Forwarded-For.
+	// Enable only when a reverse proxy you control sets that header.
+	TrustProxyHeaders bool
+
 	// DBConnectTimeout bounds how long startup waits for Postgres to
 	// accept connections (compose start ordering, serverless cold starts).
 	DBConnectTimeout time.Duration
@@ -150,6 +185,15 @@ func Load() (*Config, error) {
 		RelayPublicURL:   getEnvOrDefault("RELAY_PUBLIC_URL", "ws://localhost:8080/agent/connect"),
 		LocalModeEnabled: getEnvOrDefault("ENABLE_LOCAL_MODE", "true") == "true",
 		AdminToken:       os.Getenv("ADMIN_TOKEN"),
+
+		PublicURL:             getEnvOrDefault("PUBLIC_URL", "http://localhost:5173"),
+		GitHubClientID:        os.Getenv("GITHUB_CLIENT_ID"),
+		GitHubClientSecret:    os.Getenv("GITHUB_CLIENT_SECRET"),
+		AuthDevLogin:          getEnvOrDefault("AUTH_DEV_LOGIN", "false") == "true",
+		RateLimitRegister:     getEnvOrDefault("RATE_LIMIT_REGISTER", "10/h"),
+		RateLimitTroubleshoot: getEnvOrDefault("RATE_LIMIT_TROUBLESHOOT", "30/m"),
+		RateLimitLogin:        getEnvOrDefault("RATE_LIMIT_LOGIN", "30/m"),
+		TrustProxyHeaders:     getEnvOrDefault("TRUST_PROXY_HEADERS", "false") == "true",
 		CORSAllowedOrigins: parseOrigins(getEnvOrDefault(
 			"CORS_ALLOWED_ORIGINS",
 			"http://localhost:5173,http://localhost:3000",
@@ -173,6 +217,16 @@ func Load() (*Config, error) {
 	cfg.DBConnectTimeout, err = getDurationOrDefault("DB_CONNECT_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("config: invalid DB_CONNECT_TIMEOUT: %w", err)
+	}
+
+	cfg.SessionTTL, err = getDurationOrDefault("SESSION_TTL", 30*24*time.Hour)
+	if err != nil {
+		return nil, fmt.Errorf("config: invalid SESSION_TTL: %w", err)
+	}
+
+	cfg.MaxClustersPerUser, err = strconv.Atoi(getEnvOrDefault("MAX_CLUSTERS_PER_USER", "10"))
+	if err != nil || cfg.MaxClustersPerUser < 0 {
+		return nil, fmt.Errorf("config: invalid MAX_CLUSTERS_PER_USER %q", os.Getenv("MAX_CLUSTERS_PER_USER"))
 	}
 
 	// We deliberately do NOT require DatabaseURL or AIAuthToken to be

@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log"
@@ -12,7 +13,9 @@ import (
 	"time"
 
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/ai"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/auth"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/collector"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/store"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/tunnel"
 )
@@ -48,8 +51,26 @@ type Server struct {
 	// absent code path, not a permission check that could have a bug.
 	LocalModeEnabled bool
 
-	// AdminToken, when set, authorizes listing all registered clusters.
+	// AdminToken, when set, is an operator credential: as a Bearer token
+	// it lists every registered cluster and can reach any of them.
 	AdminToken string
+
+	// Auth resolves browser sessions. Remote-cluster routes require a
+	// signed-in user who owns the cluster (or AdminToken). nil means no
+	// accounts — then only AdminToken can reach remote clusters.
+	Auth *auth.Manager
+
+	// MaxClustersPerUser caps registrations per account (0 = unlimited).
+	MaxClustersPerUser int
+
+	// Per-caller rate limits; nil = unlimited.
+	RegisterLimiter     *RateLimiter // POST /api/clusters, per user
+	TroubleshootLimiter *RateLimiter // troubleshoot routes, per user or IP
+	LoginLimiter        *RateLimiter // sign-in endpoints, per IP
+
+	// TrustProxyHeaders makes rate limiting key anonymous callers by the
+	// X-Forwarded-For address a trusted reverse proxy appended.
+	TrustProxyHeaders bool
 }
 
 // NewRouter builds the *http.ServeMux with every route registered. Go
@@ -67,20 +88,28 @@ func (s *Server) NewRouter() *http.ServeMux {
 		mux.HandleFunc("GET /api/pods", local(s.handlePodList))
 		mux.HandleFunc("GET /api/pods/{ns}/{name}", local(s.handlePodDetail))
 		mux.HandleFunc("GET /api/pods/{ns}/{name}/logs", local(s.handlePodLogs))
-		mux.HandleFunc("POST /api/pods/{ns}/{name}/troubleshoot", local(s.handleTroubleshoot))
-		mux.HandleFunc("GET /api/pods/{ns}/{name}/troubleshoot/stream", local(s.handleTroubleshootStream))
-		mux.HandleFunc("POST /api/pods/{ns}/{name}/troubleshoot/stream", local(s.handleTroubleshootStream))
+		troubleshoot := s.limitScoped(s.TroubleshootLimiter, s.handleTroubleshoot)
+		stream := s.limitScoped(s.TroubleshootLimiter, s.handleTroubleshootStream)
+		mux.HandleFunc("POST /api/pods/{ns}/{name}/troubleshoot", local(troubleshoot))
+		mux.HandleFunc("GET /api/pods/{ns}/{name}/troubleshoot/stream", local(stream))
+		mux.HandleFunc("POST /api/pods/{ns}/{name}/troubleshoot/stream", local(stream))
 		// Local investigation history. Scoped to the local cluster only —
-		// remote clusters' history is behind their own token below.
+		// remote clusters' history is behind their owner's session below.
 		mux.HandleFunc("GET /api/investigations", local(s.handleListInvestigations))
 		mux.HandleFunc("GET /api/investigations/{id}", local(s.handleGetInvestigation))
 	}
 
+	if s.Auth != nil {
+		s.Auth.RegisterRoutes(mux, s.limitByIP(s.LoginLimiter))
+	}
+
 	if s.Hub != nil {
 		remote := s.remote
+		// Agents authenticate with their per-cluster token; nothing else
+		// does.
 		mux.HandleFunc("GET /agent/connect", s.Hub.ServeAgentConnect)
 
-		// Self-serve registration powering the "Connect your cluster" page.
+		// Signed-in users register clusters and list their own.
 		mux.HandleFunc("POST /api/clusters", s.handleRegisterCluster)
 		mux.HandleFunc("GET /api/clusters", s.handleListClusters)
 		mux.HandleFunc("DELETE /api/clusters/{clusterId}", remote(s.handleRevokeCluster))
@@ -90,8 +119,8 @@ func (s *Server) NewRouter() *http.ServeMux {
 		mux.HandleFunc("GET /api/remote/{clusterId}/pods", remote(s.handlePodList))
 		mux.HandleFunc("GET /api/remote/{clusterId}/pods/{ns}/{name}", remote(s.handlePodDetail))
 		mux.HandleFunc("GET /api/remote/{clusterId}/pods/{ns}/{name}/logs", remote(s.handlePodLogs))
-		mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/troubleshoot", remote(s.handleTroubleshoot))
-		mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/troubleshoot/stream", remote(s.handleTroubleshootStream))
+		mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/troubleshoot", remote(s.limitScoped(s.TroubleshootLimiter, s.handleTroubleshoot)))
+		mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/troubleshoot/stream", remote(s.limitScoped(s.TroubleshootLimiter, s.handleTroubleshootStream)))
 		mux.HandleFunc("GET /api/remote/{clusterId}/investigations", remote(s.handleListInvestigations))
 		mux.HandleFunc("GET /api/remote/{clusterId}/investigations/{id}", remote(s.handleGetInvestigation))
 	}
@@ -110,17 +139,64 @@ func (s *Server) local(h scopedHandler) http.HandlerFunc {
 	}
 }
 
-// remote resolves {clusterId} and enforces its bearer token on EVERY
-// request — knowing or guessing a cluster ID is not enough to read it.
+// remote resolves {clusterId} and authorizes EVERY request: the caller
+// must be signed in as the cluster's owner (or present AdminToken).
+// A cluster that doesn't exist and one owned by someone else get the
+// same 404, so cluster IDs can't be enumerated.
 func (s *Server) remote(h scopedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		clusterID := r.PathValue("clusterId")
-		if !s.Hub.VerifyToken(clusterID, bearerToken(r)) {
-			writeError(w, http.StatusUnauthorized, "invalid_cluster_token", "missing or incorrect Authorization token for this cluster")
-			return
+		if !s.isAdmin(r) {
+			u, ok := s.requireUser(w, r)
+			if !ok {
+				return
+			}
+			if owner, exists := s.Hub.Owner(clusterID); !exists || owner == "" || owner != u.ID {
+				writeError(w, http.StatusNotFound, "cluster_not_found", "no cluster with that ID in your account")
+				return
+			}
+			r = r.WithContext(withUser(r.Context(), u))
 		}
 		h(w, r, remoteSource{hub: s.Hub, clusterID: clusterID}, clusterID)
 	}
+}
+
+// requireUser resolves the session or writes 401/403/503 and returns false.
+func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (*model.User, bool) {
+	if s.Auth == nil {
+		writeError(w, http.StatusUnauthorized, "unauthenticated", "accounts are not enabled on this server")
+		return nil, false
+	}
+	u, err := s.Auth.CurrentUser(r)
+	switch {
+	case errors.Is(err, auth.ErrUntrustedOrigin):
+		writeError(w, http.StatusForbidden, "untrusted_origin", err.Error())
+		return nil, false
+	case err != nil:
+		log.Printf("api: resolving session: %v", err)
+		writeError(w, http.StatusServiceUnavailable, "auth_unavailable", "could not check your session")
+		return nil, false
+	case u == nil:
+		writeError(w, http.StatusUnauthorized, "unauthenticated", "sign in to use remote clusters")
+		return nil, false
+	}
+	return u, true
+}
+
+// isAdmin reports whether the request carries AdminToken.
+func (s *Server) isAdmin(r *http.Request) bool {
+	return s.AdminToken != "" && subtle.ConstantTimeCompare([]byte(bearerToken(r)), []byte(s.AdminToken)) == 1
+}
+
+type userKey struct{}
+
+func withUser(ctx context.Context, u *model.User) context.Context {
+	return context.WithValue(ctx, userKey{}, u)
+}
+
+func userFrom(ctx context.Context) *model.User {
+	u, _ := ctx.Value(userKey{}).(*model.User)
+	return u
 }
 
 // --- Response helpers ---
@@ -177,6 +253,9 @@ type healthResponse struct {
 	AI        string   `json:"ai"`    // ok | unavailable | disabled
 	Store     string   `json:"store"` // ok | unavailable | disabled
 	Features  []string `json:"features"`
+	// AuthProviders lists the sign-in methods ("github", "dev"); empty
+	// when accounts are disabled.
+	AuthProviders []string `json:"authProviders"`
 }
 
 // handleHealth reports liveness plus which optional components are
@@ -195,6 +274,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		AI:        "disabled",
 		Store:     "disabled",
 		Features:  []string{},
+
+		AuthProviders: []string{},
+	}
+	if s.Auth != nil {
+		resp.AuthProviders = s.Auth.Providers()
 	}
 	if s.AIClient != nil {
 		resp.AI = "ok"
@@ -216,6 +300,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Store != nil {
 		resp.Features = append(resp.Features, "history")
+	}
+	if s.Auth != nil {
+		resp.Features = append(resp.Features, "accounts")
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { troubleshootStream, type StreamHandlers } from "./api";
+import { api, troubleshootStream, type StreamHandlers } from "./api";
 import type { StageEvent, TroubleshootResult } from "./types";
 
 function sseResponse(chunks: string[], status = 200): Response {
@@ -61,14 +61,38 @@ describe("troubleshootStream", () => {
   });
 
   it("surfaces JSON error bodies from non-200 responses", async () => {
-    const res = new Response(JSON.stringify({ code: "invalid_cluster_token", message: "bad token" }), { status: 401 });
+    const res = new Response(JSON.stringify({ code: "unauthenticated", message: "sign in" }), { status: 401 });
     const r = await run(res);
-    expect(r.error?.message).toBe("bad token");
+    expect(r.error?.message).toBe("sign in");
   });
 
-  it("sends the cluster token and remote path for remote clusters", async () => {
-    const r = await run(['event: done\ndata: {"failureType":"Healthy"}\n\n'], { kind: "remote", clusterId: "prod-eu", token: "t0k" });
+  it("uses the remote path and the session cookie (never a token header) for remote clusters", async () => {
+    const r = await run(['event: done\ndata: {"failureType":"Healthy"}\n\n'], { kind: "remote", clusterId: "prod-eu" });
     expect(r.url).toBe("/api/remote/prod-eu/pods/shop/api-1/troubleshoot/stream");
-    expect((r.init?.headers as Record<string, string>).Authorization).toBe("Bearer t0k");
+    expect(r.init?.credentials).toBe("include");
+    expect((r.init?.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+});
+
+describe("api.me", () => {
+  it("returns null when signed out and the user when signed in", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: "unauthenticated", message: "no" }), { status: 401 })));
+    expect(await api.me()).toBeNull();
+    const calls: RequestInit[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_u: string, i: RequestInit) => {
+      calls.push(i);
+      return new Response(JSON.stringify({ id: "u1", provider: "github", login: "octocat" }), { status: 200 });
+    }));
+    expect((await api.me())?.login).toBe("octocat");
+    expect(calls[0].credentials).toBe("include");
+  });
+
+  it("propagates non-auth failures", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
+    await expect(api.me()).rejects.toMatchObject({ status: 503 });
+  });
+
+  it("builds a safe sign-in URL", () => {
+    expect(api.loginUrl("github", "/c/prod eu/pods")).toBe("/api/auth/github/login?next=%2Fc%2Fprod%20eu%2Fpods");
   });
 });
