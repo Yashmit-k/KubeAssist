@@ -307,6 +307,30 @@
         "relatedHints": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "fix": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Evidence-derived fix set by Go: exact values (facts) and ready-to-run commands (steps). Python must prefer these over generic templates.",
+          "properties": {
+            "facts": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["description", "isWriteAction"],
+                "properties": {
+                  "description": { "type": "string" },
+                  "command": { "type": "string" },
+                  "isWriteAction": { "type": "boolean" }
+                }
+              }
+            }
+          }
         }
       }
     },

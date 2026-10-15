@@ -10,6 +10,9 @@ Rules you must follow:
 - Commands are suggestions a human will run; never claim anything was executed.
 - Mark every command that changes cluster state (apply, edit, patch, delete, scale, set, rollout restart/undo, create, label, annotate, cordon, drain) with "isWriteAction": true.
 - Prefer read-only verification commands (get, describe, logs, events, top).
+- Commands must use the exact names and values from the SNAPSHOT and FIX FACTS (container, owner, memory limit, image, ConfigMap, key, Service...). Never write a placeholder such as <name> or <new-limit> when the value is known.
+- If the SNAPSHOT has a SUGGESTED FIX, include its write commands verbatim as your fix steps; you may add read-only investigation steps before them and explain them in your own words.
+- Use a <placeholder> only for a value the evidence cannot contain (for example the intended image tag or a config value), and say in the step's description exactly what the user must fill in.
 - If evidence is missing (for example no logs), say so in uncertaintyNotes instead of guessing.
 - Respond with a single JSON object and nothing else."""
 
@@ -52,4 +55,5 @@ Return a JSON object with exactly these keys:
 
 confidenceScore is your own 0..1 estimate of how well the evidence supports the root cause.
 Provide 2-5 resolutionSteps, starting with read-only investigation and ending with the fix.
+The fix steps must be concrete commands the user can copy and run for THIS pod.
 """

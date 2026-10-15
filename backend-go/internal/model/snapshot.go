@@ -218,4 +218,27 @@ type DetectorResult struct {
 	Evidence     []string `json:"evidence"`
 	SearchTerms  []string `json:"searchTerms"`
 	RelatedHints []string `json:"relatedHints,omitempty"`
+
+	// Fix holds concrete remediation computed from the evidence (see
+	// detect.PlanFix), so suggested commands carry real values instead
+	// of template placeholders.
+	Fix *FixPlan `json:"fix,omitempty"`
+}
+
+// FixPlan is the evidence-derived fix for one diagnosis. Facts are the
+// exact values found in the snapshot (memory limit, failing image,
+// missing ConfigMap key, ...); Steps are ready-to-run commands built
+// from them. A "<...>" placeholder remains only where the evidence
+// cannot know the answer (e.g. which image tag was intended), and the
+// step's description says so.
+type FixPlan struct {
+	Facts map[string]string `json:"facts,omitempty"`
+	Steps []FixStep         `json:"steps,omitempty"`
+}
+
+// FixStep mirrors a DiagnosisResponse resolution step.
+type FixStep struct {
+	Description   string `json:"description"`
+	Command       string `json:"command,omitempty"`
+	IsWriteAction bool   `json:"isWriteAction"`
 }

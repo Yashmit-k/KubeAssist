@@ -152,6 +152,38 @@ PLAYBOOK: dict[str, dict[str, Any]] = {
 }
 
 
+def fix_plan(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """The evidence-derived fix Go computed (detector.fix), or {}."""
+    return (snapshot.get("detector") or {}).get("fix") or {}
+
+
+def fix_write_steps(fix: dict[str, Any]) -> list[dict[str, Any]]:
+    return [s for s in fix.get("steps") or [] if s.get("isWriteAction")]
+
+
+def merge_fix_steps(template: list[dict[str, Any]], fix: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read-only template steps first, then Go's concrete fix steps.
+    When the fix has a concrete write step it replaces the template's
+    generic write steps (the "<new-limit>" kind); otherwise those stay.
+    Orders are renumbered and duplicate commands dropped."""
+    replace_writes = bool(fix_write_steps(fix))
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    candidates = [s for s in template if not (s.get("isWriteAction") and replace_writes)]
+    candidates += [
+        {"description": s["description"], "command": s.get("command") or None, "isWriteAction": bool(s.get("isWriteAction"))}
+        for s in fix.get("steps") or []
+    ]
+    for s in candidates:
+        cmd = s.get("command")
+        if cmd and cmd in seen:
+            continue
+        if cmd:
+            seen.add(cmd)
+        out.append({**s, "order": len(out) + 1})
+    return out
+
+
 def _owner(snapshot: dict[str, Any]) -> str:
     owners = snapshot.get("owners") or {}
     if owners.get("deployment"):
@@ -200,17 +232,22 @@ def stub_diagnosis(
         notes.append(f"Logs unavailable: {logs['unavailableReason']}")
     if any((c.get("restartCount") or 0) > 0 for c in snapshot.get("containers") or []) and not logs.get("previous"):
         notes.append("Previous logs were not included on the snapshot.")
-    fill = {"pod": pod, "ns": ns, "owner": _owner(snapshot), "container": _focus_container(snapshot, ftype)}
-    steps = []
-    for i, (desc, cmd_tpl, write) in enumerate(book["steps"], start=1):
-        cmd = cmd_tpl.format(**fill) if cmd_tpl else None
-        steps.append(
-            {
-                "order": i,
-                "description": desc,
-                "command": cmd,
-                "isWriteAction": write,
-            }
+    fix = fix_plan(snapshot)
+    facts = fix.get("facts") or {}
+    fill = {
+        "pod": pod,
+        "ns": ns,
+        "owner": facts.get("owner") or _owner(snapshot),
+        "container": facts.get("container") or _focus_container(snapshot, ftype),
+    }
+    steps = merge_fix_steps(
+        [{"description": d, "command": c.format(**fill) if c else None, "isWriteAction": w} for d, c, w in book["steps"]],
+        fix,
+    )
+    if fix_write_steps(fix):
+        notes.append(
+            "The fix commands were built from this pod's evidence. Any remaining <...> value is something only you "
+            "know (for example the intended image tag or a config value) — replace it before running the command."
         )
     refs = []
     for d in retrieved[:4]:

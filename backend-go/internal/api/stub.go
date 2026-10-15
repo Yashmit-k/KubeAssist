@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/detect"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
@@ -210,15 +211,11 @@ func stubDiagnosis(s *model.DiagnosticSnapshot, aiErr string) model.DiagnosisRes
 	vars := strings.NewReplacer(
 		"{pod}", s.Pod.Name,
 		"{ns}", s.Pod.Namespace,
-		"{owner}", ownerRef(s),
-		"{container}", focusContainer(s),
+		"{owner}", detect.OwnerRef(s),
+		"{container}", detect.FocusContainer(s),
 	)
 
-	steps := make([]model.ResolutionStep, 0, len(entry.steps))
-	for i, st := range entry.steps {
-		cmd := vars.Replace(st.cmd)
-		steps = append(steps, model.ResolutionStep{Order: i + 1, Description: st.desc, Command: &cmd, IsWriteAction: st.write})
-	}
+	steps := resolutionSteps(entry.steps, d.Fix, vars)
 	verify := make([]string, 0, len(entry.verify))
 	for _, v := range entry.verify {
 		verify = append(verify, vars.Replace(v))
@@ -234,6 +231,9 @@ func stubDiagnosis(s *model.DiagnosticSnapshot, aiErr string) model.DiagnosisRes
 		notes = append(notes, "The AI service could not be reached, so this is the detector-only diagnosis: classification and evidence are deterministic, remediation steps are a generic playbook. Error: "+truncate(aiErr, 200))
 	} else {
 		notes = append(notes, "Detector-only mode (no AI service configured): classification and evidence are deterministic; remediation steps are a generic playbook for this failure type.")
+	}
+	if hasWriteStep(d.Fix) {
+		notes = append(notes, "The fix commands were built from this pod's evidence. Any remaining <...> value is something only you know (for example the intended image tag or a config value) — replace it before running the command.")
 	}
 	if s.Logs.UnavailableReason != "" {
 		notes = append(notes, "Logs: "+s.Logs.UnavailableReason)
@@ -257,40 +257,48 @@ func stubDiagnosis(s *model.DiagnosticSnapshot, aiErr string) model.DiagnosisRes
 	}
 }
 
-// ownerRef returns "deployment/<name>" when the pod belongs to a
-// Deployment, otherwise the most specific owner, otherwise the pod.
-func ownerRef(s *model.DiagnosticSnapshot) string {
-	if s.Owners != nil && s.Owners.Deployment != nil {
-		return "deployment/" + s.Owners.Deployment.Name
+// resolutionSteps combines the playbook with the evidence-derived fix:
+// the playbook's read-only investigation steps come first; when the fix
+// plan has a concrete write step, it replaces the playbook's generic
+// write steps (the "<new-limit>" kind), otherwise those are kept.
+func resolutionSteps(playbook []stubStep, fix *model.FixPlan, vars *strings.Replacer) []model.ResolutionStep {
+	replaceWrites := hasWriteStep(fix)
+	out := make([]model.ResolutionStep, 0, len(playbook)+4)
+	seen := map[string]bool{}
+	add := func(desc, cmd string, write bool) {
+		if cmd != "" && seen[cmd] {
+			return
+		}
+		seen[cmd] = true
+		st := model.ResolutionStep{Order: len(out) + 1, Description: desc, IsWriteAction: write}
+		if cmd != "" {
+			c := cmd
+			st.Command = &c
+		}
+		out = append(out, st)
 	}
-	for _, o := range s.Pod.OwnerRefs {
-		return strings.ToLower(o.Kind) + "/" + o.Name
+	for _, st := range playbook {
+		if st.write && replaceWrites {
+			continue
+		}
+		add(st.desc, vars.Replace(st.cmd), st.write)
 	}
-	return "pod/" + s.Pod.Name
+	if fix != nil {
+		for _, st := range fix.Steps {
+			add(st.Description, st.Command, st.IsWriteAction)
+		}
+	}
+	return out
 }
 
-// focusContainer picks the container the evidence is about: a failing
-// init container first, then the least healthy app container.
-func focusContainer(s *model.DiagnosticSnapshot) string {
-	if s.Detector.FailureType == "InitContainerFailure" {
-		for _, c := range s.InitContainers {
-			if c.State.Phase != "terminated" || (c.State.ExitCode != nil && *c.State.ExitCode != 0) {
-				return c.Name
-			}
+func hasWriteStep(fix *model.FixPlan) bool {
+	if fix == nil {
+		return false
+	}
+	for _, st := range fix.Steps {
+		if st.IsWriteAction {
+			return true
 		}
 	}
-	best := ""
-	var bestRestarts int32 = -1
-	for _, c := range s.Containers {
-		if !c.Ready && c.RestartCount > bestRestarts {
-			best, bestRestarts = c.Name, c.RestartCount
-		}
-	}
-	if best != "" {
-		return best
-	}
-	if len(s.Containers) > 0 {
-		return s.Containers[0].Name
-	}
-	return "<container>"
+	return false
 }

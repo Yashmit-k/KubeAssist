@@ -373,3 +373,20 @@ func TestDetect_AddsLastErrorLogLine(t *testing.T) {
 		t.Errorf("want the fatal line as evidence, got %q", last)
 	}
 }
+
+// The kubelet's "unable to retrieve container logs" reply (returned while
+// a container restarts) is not the app's error and must be skipped.
+func TestLastErrorLogLine_SkipsKubeletLogErrors(t *testing.T) {
+	prev := "checking database...\nfatal: database unreachable\n"
+	s := &model.DiagnosticSnapshot{Logs: model.LogBundle{
+		Previous: &prev,
+		Current:  "unable to retrieve container logs for containerd://41bab8e31e8b",
+	}}
+	if got := lastErrorLogLine(s); got != "fatal: database unreachable" {
+		t.Errorf("got %q", got)
+	}
+	only := &model.DiagnosticSnapshot{Logs: model.LogBundle{Current: "unable to retrieve container logs for containerd://abc"}}
+	if got := lastErrorLogLine(only); got != "" {
+		t.Errorf("kubelet error must not be quoted, got %q", got)
+	}
+}

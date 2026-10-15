@@ -1,6 +1,7 @@
 import { useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { AlertTriangle, Check, Copy, Loader2 } from "lucide-react";
 import type { Tone } from "../lib/format";
+import { commandParts } from "../lib/commands";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
@@ -95,12 +96,23 @@ export function CopyButton({ text, label, className }: { text: string; label?: s
   );
 }
 
-/** A shell command the user copies and runs themselves. */
+/** A shell command the user copies and runs themselves. Any <value>
+ * the evidence couldn't know is highlighted so it gets filled in. */
 export function Command({ cmd, write }: { cmd: string; write?: boolean }) {
   return (
     <div className={cx("group flex items-start gap-2 rounded-lg bg-code-bg px-3 py-2 font-mono text-[12.5px] text-code-fg", write && "ring-1 ring-warn/60")}>
       <span className="select-none text-faint">$</span>
-      <code className="min-w-0 flex-1 break-all whitespace-pre-wrap">{cmd}</code>
+      <code className="min-w-0 flex-1 break-all whitespace-pre-wrap">
+        {commandParts(cmd).map((p, i) =>
+          p.placeholder ? (
+            <mark key={i} className="rounded bg-warn/25 px-0.5 text-inherit" title="Replace this with your value before running">
+              {p.text}
+            </mark>
+          ) : (
+            p.text
+          ),
+        )}
+      </code>
       <CopyButton text={cmd} className="-my-1 text-code-fg/70 hover:bg-white/10 hover:text-code-fg" />
     </div>
   );

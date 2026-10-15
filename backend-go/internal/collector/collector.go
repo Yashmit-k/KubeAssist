@@ -135,8 +135,8 @@ func (c *Collector) CollectCore(ctx context.Context, namespace, podName string) 
 			Annotations: copyMap(pod.Annotations),
 			OwnerRefs:   buildOwnerRefs(pod.OwnerReferences),
 		},
-		InitContainers: buildContainerInfos(pod, pod.Status.InitContainerStatuses),
-		Containers:     buildContainerInfos(pod, pod.Status.ContainerStatuses),
+		InitContainers: buildContainerInfos(pod, pod.Status.InitContainerStatuses, true),
+		Containers:     buildContainerInfos(pod, pod.Status.ContainerStatuses, false),
 		Conditions:     buildConditions(pod),
 		Events:         events,
 		Logs:           logs,
@@ -399,11 +399,24 @@ func (c *Collector) fetchLogs(ctx context.Context, namespace, podName, container
 
 // buildContainerInfos joins container STATUS (runtime state) with
 // container SPEC (resources, probes) by name.
-func buildContainerInfos(pod *corev1.Pod, statuses []corev1.ContainerStatus) []model.ContainerInfo {
+func buildContainerInfos(pod *corev1.Pod, statuses []corev1.ContainerStatus, isInit bool) []model.ContainerInfo {
 	allSpecs := append(append([]corev1.Container{}, pod.Spec.Containers...), pod.Spec.InitContainers...)
 	specByName := make(map[string]corev1.Container, len(allSpecs))
 	for _, c := range allSpecs {
 		specByName[c.Name] = c
+	}
+
+	// A pod that was never scheduled has no statuses at all. Report its
+	// containers from the spec (state not reported) so their resource
+	// requests — usually why scheduling failed — are part of the evidence.
+	if len(statuses) == 0 && pod.Status.Phase == corev1.PodPending && !podScheduled(pod) {
+		specs := pod.Spec.Containers
+		if isInit {
+			specs = pod.Spec.InitContainers
+		}
+		for _, c := range specs {
+			statuses = append(statuses, corev1.ContainerStatus{Name: c.Name, Image: c.Image})
+		}
 	}
 
 	result := make([]model.ContainerInfo, 0, len(statuses))
@@ -429,6 +442,15 @@ func buildContainerInfos(pod *corev1.Pod, statuses []corev1.ContainerStatus) []m
 		result = append(result, info)
 	}
 	return result
+}
+
+func podScheduled(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // toContainerState flattens Kubernetes' waiting/running/terminated union.

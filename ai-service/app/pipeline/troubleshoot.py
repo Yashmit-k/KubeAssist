@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from app.config import settings
@@ -8,7 +9,7 @@ from app.llm.client import LLMError, complete_json
 from app.pipeline.confidence import hybrid_confidence
 from app.pipeline.formatter import format_evidence
 from app.pipeline.prompt import SYSTEM_PROMPT, build_prompt
-from app.pipeline.stub import stub_diagnosis
+from app.pipeline.stub import fix_plan, fix_write_steps, merge_fix_steps, stub_diagnosis
 from app.pipeline.validator import enforce_write_flags, validate_full
 from app.rag.retrieve import Retriever, Retrieved
 
@@ -58,7 +59,7 @@ def _shape_llm_output(raw: dict[str, Any], snapshot: dict[str, Any], hits: list[
             "command": str(cmd) if cmd else None,
             "isWriteAction": bool(st.get("isWriteAction", False)),
         })
-    out["resolutionSteps"] = steps
+    out["resolutionSteps"] = _ensure_concrete_fix(steps, snapshot)
     enforce_write_flags(out)
 
     allowed = {h.url: h for h in hits}
@@ -74,6 +75,21 @@ def _shape_llm_output(raw: dict[str, Any], snapshot: dict[str, Any], hits: list[
         snapshot, hits, float(self_score) if isinstance(self_score, (int, float)) else None
     )
     return out
+
+
+_PLACEHOLDER = re.compile(r"<[a-z][a-z0-9 _-]*>", re.IGNORECASE)
+
+
+def _ensure_concrete_fix(steps: list[dict[str, Any]], snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """If Go computed a concrete fix and the model did not use it, drop
+    the model's placeholder write steps and append Go's fix steps — the
+    user always gets the exact commands the evidence supports."""
+    fix = fix_plan(snapshot)
+    wanted = [s.get("command") for s in fix_write_steps(fix) if s.get("command")]
+    if not wanted or any(s.get("command") in wanted for s in steps):
+        return steps
+    kept = [s for s in steps if not (s.get("isWriteAction") and _PLACEHOLDER.search(s.get("command") or ""))]
+    return merge_fix_steps(kept, fix)
 
 
 async def run_troubleshoot(snapshot: dict[str, Any], retriever: Retriever) -> dict[str, Any]:

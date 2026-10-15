@@ -99,6 +99,19 @@ def format_evidence(snapshot: dict[str, Any]) -> str:
         lines.append(f"  - {ev}")
     for hint in det.get("relatedHints") or []:
         lines.append(f"  hint: {hint}")
+
+    fix = det.get("fix") or {}
+    if fix.get("facts"):
+        lines.append("FIX FACTS (exact values from the evidence)")
+        for k, v in sorted(fix["facts"].items()):
+            lines.append(f"  {k}: {v}")
+    if fix.get("steps"):
+        lines.append("SUGGESTED FIX (commands computed from the evidence)")
+        for i, st in enumerate(fix["steps"], start=1):
+            tag = "write" if st.get("isWriteAction") else "read-only"
+            lines.append(f"  {i}. [{tag}] {st.get('description')}")
+            if st.get("command"):
+                lines.append(f"     $ {st['command']}")
     return "\n".join(lines)
 
 

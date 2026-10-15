@@ -145,3 +145,21 @@ func TestCollectRelated_ConfigMapKeysAndServices(t *testing.T) {
 		t.Errorf("services = %+v", rel.Services)
 	}
 }
+
+// A never-scheduled pod has no container statuses; its containers come
+// from the spec so the requests that blocked scheduling are evidence.
+func TestCollectCore_UnscheduledPodReportsSpecContainers(t *testing.T) {
+	pod := testfixtures.PendingUnschedulablePod("shop", "big-1")
+	c := New(fake.NewSimpleClientset(pod), "kind-test", "v1.31.0")
+	snap, err := c.CollectCore(context.Background(), "shop", "big-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Containers) != 1 {
+		t.Fatalf("want the spec container, got %+v", snap.Containers)
+	}
+	got := snap.Containers[0]
+	if got.Name != "big" || got.Ready || got.State.Phase != "waiting" || got.Resources.Requests["cpu"] != "64" {
+		t.Errorf("container = %+v", got)
+	}
+}

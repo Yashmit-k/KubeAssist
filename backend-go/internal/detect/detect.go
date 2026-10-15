@@ -109,32 +109,43 @@ func DetectRelated(s *model.DiagnosticSnapshot, core model.DetectorResult) model
 //     endpoints shares a selector key with the pod's labels (the classic
 //     typo'd or renamed label value).
 func findSelectorMismatch(s *model.DiagnosticSnapshot) *model.DetectorResult {
-	labels := s.Pod.Labels
-	result := func(svc model.ServiceSummary, confidence float64, why string) *model.DetectorResult {
-		return &model.DetectorResult{
-			FailureType: "ServiceSelectorMismatch",
-			Confidence:  confidence,
-			Evidence: []string{
-				fmt.Sprintf("Service %q has %d ready endpoints", svc.Name, svc.EndpointsReady),
-				fmt.Sprintf("Service selector %v does not match pod labels %v", svc.Selector, labels),
-				why,
-			},
-			SearchTerms: []string{"service selector mismatch", "endpoints", "service discovery", "labels"},
-		}
+	svc, confidence, why := mismatchedService(s)
+	if svc == nil {
+		return nil
 	}
+	return &model.DetectorResult{
+		FailureType: "ServiceSelectorMismatch",
+		Confidence:  confidence,
+		Evidence: []string{
+			fmt.Sprintf("Service %q has %d ready endpoints", svc.Name, svc.EndpointsReady),
+			fmt.Sprintf("Service selector %v does not match pod labels %v", svc.Selector, s.Pod.Labels),
+			why,
+		},
+		SearchTerms: []string{"service selector mismatch", "endpoints", "service discovery", "labels"},
+	}
+}
+
+// mismatchedService returns the Service that should route to this pod
+// but doesn't (see findSelectorMismatch for the rules), or nil.
+func mismatchedService(s *model.DiagnosticSnapshot) (*model.ServiceSummary, float64, string) {
+	if s.Related == nil {
+		return nil, 0, ""
+	}
+	labels := s.Pod.Labels
 
 	if s.ServiceName != nil && *s.ServiceName != "" {
-		for _, svc := range s.Related.Services {
+		for i := range s.Related.Services {
+			svc := s.Related.Services[i]
 			if svc.Name == *s.ServiceName && !podMatchesSelector(labels, svc.Selector) {
-				return result(svc, 0.9, fmt.Sprintf("Service %q was named in the request as the one that should reach this pod", svc.Name))
+				return &svc, 0.9, fmt.Sprintf("Service %q was named in the request as the one that should reach this pod", svc.Name)
 			}
 		}
-		return nil
+		return nil, 0, ""
 	}
 
 	for _, svc := range s.Related.Services {
 		if podMatchesSelector(labels, svc.Selector) {
-			return nil // something already routes to this pod
+			return nil, 0, "" // something already routes to this pod
 		}
 	}
 
@@ -159,13 +170,13 @@ func findSelectorMismatch(s *model.DiagnosticSnapshot) *model.DetectorResult {
 		}
 	}
 	if best == nil {
-		return nil
+		return nil, 0, ""
 	}
 	confidence := 0.7
 	if bestScore >= 2 {
 		confidence = 0.85
 	}
-	return result(*best, confidence, "No Service in the namespace selects this pod, and this one shares selector keys with its labels")
+	return best, confidence, "No Service in the namespace selects this pod, and this one shares selector keys with its labels"
 }
 
 // detectEvicted checks for NODE-level eviction — Kubernetes sets
@@ -530,6 +541,11 @@ func podMatchesSelector(labels, selector map[string]string) bool {
 // errorLinePattern matches log lines that typically explain an exit.
 var errorLinePattern = regexp.MustCompile(`(?i)\b(fatal|panic|error|exception|traceback|failed|unable to|cannot|could not|refused|denied|not found|no such)\b`)
 
+// kubeletLogError matches what the kubelet returns INSTEAD of logs when
+// a container is mid-restart (its log file is gone). It is not the
+// app's output and must never be quoted as the app's error.
+var kubeletLogError = regexp.MustCompile(`^(unable to retrieve container logs for |failed to try resolving symlinks in path )`)
+
 // lastErrorLogLine returns the last log line that looks like the reason
 // a process exited, preferring the previous (crashed) instance's logs.
 // It's deterministic evidence: an actual line from the snapshot, never
@@ -544,7 +560,7 @@ func lastErrorLogLine(s *model.DiagnosticSnapshot) string {
 		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 		for i := len(lines) - 1; i >= 0 && i >= len(lines)-50; i-- {
 			line := strings.TrimSpace(lines[i])
-			if line != "" && errorLinePattern.MatchString(line) {
+			if line != "" && errorLinePattern.MatchString(line) && !kubeletLogError.MatchString(line) {
 				if len(line) > 240 {
 					line = line[:240] + "…"
 				}

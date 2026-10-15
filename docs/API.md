@@ -72,7 +72,15 @@ on a container that never restarted returns `{"logs":"","unavailableReason":"...
 
 Pipeline: collect (pass 1) → detect → pass 2 (Services/EndpointSlices + ConfigMap
 keys) when the pod looks Healthy/Unknown, is CreateContainerConfigError, or
-`serviceName` is given → redact → one call to the AI service → save.
+`serviceName` is given → plan the fix → redact → one call to the AI service → save.
+
+"Plan the fix" (`detect.PlanFix`) turns the evidence into `detector.fix` on the
+snapshot: `facts` (the exact values involved, e.g. `memoryLimit: 32Mi`,
+`configMap: application-config`, `missingKey: database-url`) and `steps`
+(ready-to-run commands built from them). The playbook answers and the LLM prompt
+use these, so fix commands carry real values; a `<placeholder>` remains only for
+what the evidence cannot know (an intended image tag, a config value), and the
+UI highlights it. Nothing is ever executed by KubeAssist.
 
 Response: a [`DiagnosisResponse`](../schemas/diagnosis.schema.json) plus Go metadata:
 

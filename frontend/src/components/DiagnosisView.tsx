@@ -1,5 +1,6 @@
-import { AlertTriangle, BookOpen, CheckCircle2, CircleHelp, ExternalLink, RotateCcw, ShieldAlert, Wrench } from "lucide-react";
+import { AlertTriangle, BookOpen, CheckCircle2, CircleHelp, ExternalLink, PencilLine, RotateCcw, ShieldAlert, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
+import { hasPlaceholder } from "../lib/commands";
 import { failureLabel, failureTone, modeLabel } from "../lib/format";
 import type { Diagnosis } from "../lib/types";
 import { Badge, Command, Confidence } from "./ui";
@@ -72,6 +73,11 @@ export default function DiagnosisView({ d, aiError }: { d: Diagnosis; aiError?: 
                   {s.isWriteAction && (
                     <Badge tone="warn" title="This command changes your cluster. Review it before running.">
                       <ShieldAlert className="size-3" /> changes cluster
+                    </Badge>
+                  )}
+                  {s.command && hasPlaceholder(s.command) && (
+                    <Badge tone="info" title="The highlighted value isn't in the evidence — only you know it. Replace it before running.">
+                      <PencilLine className="size-3" /> fill in highlighted value
                     </Badge>
                   )}
                 </div>

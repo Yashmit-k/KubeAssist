@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Download, Loader2, LogIn, PlugZap, ShieldCheck, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useHealth } from "../components/Layout";
 import SignIn, { authErrorMessage } from "../components/SignIn";
 import { Badge, Button, buttonClass, Card, Command, CopyButton, Dot, Empty, ErrorBox, PageHeader, Spinner } from "../components/ui";
 import { api } from "../lib/api";
+import { installCommand } from "../lib/commands";
 import { useMe, useMyClusters } from "../lib/clusters";
 import { age } from "../lib/format";
 import type { ClusterStatus, RegisteredCluster } from "../lib/types";
@@ -19,6 +20,29 @@ function download(filename: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
+function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
+  return (
+    <li>
+      <div className="mb-1.5 text-sm font-medium">
+        {n}. {title}
+      </div>
+      {children}
+    </li>
+  );
+}
+
+function Hint({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details className="mt-2 rounded-lg border border-line px-3 py-2">
+      <summary className="cursor-pointer text-xs font-medium text-muted">{title}</summary>
+      <div className="mt-2 space-y-2 text-xs text-muted">{children}</div>
+    </details>
+  );
+}
+
+/** How long to wait for the agent before showing troubleshooting help. */
+const SLOW_CONNECT_MS = 60_000;
+
 function Registered({ reg }: { reg: RegisteredCluster }) {
   const status = useQuery({
     queryKey: ["remote-status", reg.clusterId],
@@ -27,31 +51,81 @@ function Registered({ reg }: { reg: RegisteredCluster }) {
     retry: false,
   });
   const connected = status.data?.connected;
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), SLOW_CONNECT_MS);
+    return () => clearTimeout(t);
+  }, []);
   const file = `kubeassist-agent-${reg.clusterId}.yaml`;
+  const install = installCommand(reg.manifest);
+  const lines = reg.manifest.trimEnd().split("\n").length;
 
   return (
     <Card title={`Install the agent in “${reg.clusterId}”`}>
       <ol className="space-y-5">
-        <li>
-          <div className="mb-1.5 text-sm font-medium">1. Apply the agent manifest</div>
-          <p className="mb-2 text-sm text-muted">
-            Read-only RBAC (no Secrets, no writes). The agent connects outbound to <code className="font-mono text-xs">{reg.relayUrl}</code>; nothing in your cluster is exposed.
-            The manifest contains the agent's own token — it's shown only now, so apply it (or save the file) before leaving this page.
-          </p>
-          <div className="mb-2 flex flex-wrap gap-2">
-            <Button onClick={() => download(file, reg.manifest)}>
-              <Download className="size-4" /> Download {file}
-            </Button>
-            <CopyButton text={reg.manifest} label="Copy manifest" className="border border-line px-2.5" />
+        <Step n={1} title="Check that kubectl reaches the right cluster">
+          <p className="mb-2 text-sm text-muted">In the terminal you'll install from, confirm which cluster is selected and that it answers:</p>
+          <div className="space-y-1.5">
+            <Command cmd="kubectl config current-context" />
+            <Command cmd="kubectl get nodes" />
           </div>
-          <Command cmd={`kubectl apply -f ${file}`} write />
-          <details className="mt-2">
-            <summary className="cursor-pointer text-xs text-muted">View manifest</summary>
-            <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-code-bg p-3 font-mono text-[11px] text-code-fg">{reg.manifest}</pre>
-          </details>
-        </li>
-        <li>
-          <div className="mb-1.5 text-sm font-medium">2. Wait for it to connect</div>
+          <Hint title="kubectl get nodes fails or shows the wrong cluster?">
+            <p>
+              <b className="text-fg">Wrong cluster:</b> list them with <code className="font-mono">kubectl config get-contexts</code> and switch with{" "}
+              <code className="font-mono">kubectl config use-context &lt;name&gt;</code>.
+            </p>
+            <p>
+              <b className="text-fg">“connection refused” on a local cluster (Kind, minikube, Docker Desktop):</b> the cluster runs inside Docker, so start
+              Docker Desktop first and wait until it says it's running. Then check the cluster: <code className="font-mono">kind get clusters</code> or{" "}
+              <code className="font-mono">minikube status</code> (<code className="font-mono">minikube start</code> if it's stopped).
+            </p>
+            <p>
+              <b className="text-fg">Cloud cluster (“Unauthorized” or expired credentials):</b> refresh them, e.g.{" "}
+              <code className="font-mono">aws eks update-kubeconfig --name &lt;cluster&gt;</code>,{" "}
+              <code className="font-mono">gcloud container clusters get-credentials &lt;cluster&gt;</code> or{" "}
+              <code className="font-mono">az aks get-credentials -n &lt;cluster&gt; -g &lt;group&gt;</code>.
+            </p>
+            <p>
+              <b className="text-fg">Permissions:</b> installing creates a ClusterRole, so <code className="font-mono">kubectl auth can-i create clusterrole</code> must
+              answer <code className="font-mono">yes</code>.
+            </p>
+          </Hint>
+        </Step>
+
+        <Step n={2} title="Install the agent — paste this one command">
+          <p className="mb-2 text-sm text-muted">
+            Copy it and paste it into the same terminal (macOS, Linux or WSL). It applies the manifest directly — no file to save. Read-only RBAC (no Secrets,
+            no writes); the agent connects outbound to <code className="font-mono text-xs">{reg.relayUrl}</code>, so nothing in your cluster is exposed.
+          </p>
+          <div className="rounded-lg bg-code-bg px-3 py-2.5 font-mono text-[12.5px] text-code-fg ring-1 ring-warn/60">
+            <div className="flex items-start gap-2">
+              <span className="select-none text-faint">$</span>
+              <div className="min-w-0 flex-1">
+                <div>{install.split("\n")[0]}</div>
+                <div className="text-faint">… agent manifest ({lines} lines) …</div>
+                <div>{install.trimEnd().split("\n").at(-1)}</div>
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <CopyButton text={install} label="Copy install command" className="bg-white/10 px-2.5 py-1.5 text-code-fg hover:bg-white/20 hover:text-code-fg" />
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            The command contains the agent's token and is shown only now — install it (or download the file) before leaving this page.
+          </p>
+          <Hint title="Windows PowerShell, or prefer a file?">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={() => download(file, reg.manifest)}>
+                <Download className="size-4" /> Download {file}
+              </Button>
+              <span>then run it from the folder you saved it in:</span>
+            </div>
+            <Command cmd={`kubectl apply -f ${file}`} write />
+            <pre className="max-h-60 overflow-auto rounded-lg bg-code-bg p-3 font-mono text-[11px] text-code-fg">{reg.manifest}</pre>
+          </Hint>
+        </Step>
+
+        <Step n={3} title="Wait for it to connect">
           {connected ? (
             <div className="flex flex-wrap items-center gap-3">
               <Badge tone="ok">
@@ -62,11 +136,24 @@ function Registered({ reg }: { reg: RegisteredCluster }) {
               </Link>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-sm text-muted">
-              <Loader2 className="size-4 animate-spin" /> Waiting for the agent…
-            </div>
+            <>
+              <div className="flex items-center gap-2 text-sm text-muted">
+                <Loader2 className="size-4 animate-spin" /> Waiting for the agent… (usually under 30 seconds)
+              </div>
+              {slow && (
+                <div className="mt-3 space-y-1.5 rounded-lg border border-warn/40 bg-warn-soft px-3 py-2.5 text-sm">
+                  <p>Still not connected? Check the agent's pod and logs:</p>
+                  <Command cmd="kubectl -n kubeassist get pods" />
+                  <Command cmd="kubectl -n kubeassist logs deployment/kubeassist-agent --tail=20" />
+                  <p className="text-xs text-muted">
+                    <b>ImagePullBackOff</b>: the cluster can't download the agent image. <b>401 / unauthorized</b> in the logs: the cluster was registered
+                    again, which issues a new token — paste the newest install command. <b>No pod at all</b>: the install command didn't run; check step 1.
+                  </p>
+                </div>
+              )}
+            </>
           )}
-        </li>
+        </Step>
       </ol>
     </Card>
   );

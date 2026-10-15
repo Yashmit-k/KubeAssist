@@ -94,6 +94,15 @@ func Snapshot(s *model.DiagnosticSnapshot) *model.DiagnosticSnapshot {
 	for i := range s.Detector.RelatedHints {
 		s.Detector.RelatedHints[i] = Text(s.Detector.RelatedHints[i])
 	}
+	if f := s.Detector.Fix; f != nil {
+		for k, v := range f.Facts {
+			f.Facts[k] = Text(v)
+		}
+		for i := range f.Steps {
+			f.Steps[i].Description = Text(f.Steps[i].Description)
+			f.Steps[i].Command = Text(f.Steps[i].Command)
+		}
+	}
 
 	// last-applied-configuration embeds the whole manifest, including
 	// any literal env values — drop it rather than try to scrub it.

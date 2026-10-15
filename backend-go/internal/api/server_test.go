@@ -223,3 +223,28 @@ func TestHealth_ReportsFeatures(t *testing.T) {
 		t.Errorf("health = %+v", h)
 	}
 }
+
+// The detector-only answer swaps the playbook's generic write step for
+// the evidence-derived one, and keeps the read-only investigation steps.
+func TestStubDiagnosis_UsesConcreteFix(t *testing.T) {
+	snap := &model.DiagnosticSnapshot{
+		Pod: model.PodInfo{Name: "oom-1", Namespace: "shop", Phase: "Running"},
+		Detector: model.DetectorResult{FailureType: "OOMKilled", Confidence: 0.9, Evidence: []string{"x"}, SearchTerms: []string{},
+			Fix: &model.FixPlan{Steps: []model.FixStep{{Description: "Raise to 64Mi", Command: "kubectl set resources deployment/oom -n shop -c app --limits=memory=64Mi", IsWriteAction: true}}}},
+	}
+	d := stubDiagnosis(snap, "")
+	var cmds []string
+	for _, st := range d.ResolutionSteps {
+		if st.Command != nil {
+			cmds = append(cmds, *st.Command)
+		}
+	}
+	all := strings.Join(cmds, "\n")
+	if strings.Contains(all, "<new-limit>") || !strings.Contains(all, "--limits=memory=64Mi") || !strings.Contains(all, "kubectl describe pod oom-1 -n shop") {
+		t.Errorf("steps = %s", all)
+	}
+	last := d.ResolutionSteps[len(d.ResolutionSteps)-1]
+	if !last.IsWriteAction || last.Order != len(d.ResolutionSteps) {
+		t.Errorf("fix should be the last, write-flagged step: %+v", last)
+	}
+}
