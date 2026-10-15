@@ -54,6 +54,15 @@ services:
       AGENT_IMAGE: ${AGENT_IMAGE:-ghcr.io/yashmit-k/kubeassist-agent:latest}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       CORS_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
+      # Accounts. The UI origin (OAuth callbacks + cookie security), and
+      # a GitHub OAuth App when you have one. AUTH_DEV_LOGIN lets anyone
+      # sign in as any username: fine for this local stack, never in prod.
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      AUTH_DEV_LOGIN: ${AUTH_DEV_LOGIN:-true}
+      # nginx (the frontend container) appends the client address.
+      TRUST_PROXY_HEADERS: "true"
     ports:
       - "8080:8080"
     depends_on:

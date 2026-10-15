@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { Boxes, History, PlugZap, Server } from "lucide-react";
+import { Boxes, History, LogIn, PlugZap, Server } from "lucide-react";
 import { NavLink, Outlet, useNavigate, useParams } from "react-router";
 import { api } from "../lib/api";
-import { LOCAL, useSavedClusters } from "../lib/clusters";
+import { LOCAL, useMe, useMyClusters } from "../lib/clusters";
 import type { Health } from "../lib/types";
+import { UserBadge } from "./SignIn";
 import { cx, Dot } from "./ui";
 
 export function useHealth() {
@@ -12,11 +13,11 @@ export function useHealth() {
 
 function ClusterSwitcher({ health }: { health?: Health }) {
   const { cluster } = useParams();
-  const saved = useSavedClusters();
+  const mine = useMyClusters();
   const navigate = useNavigate();
   const options = [
     ...(health?.localMode ? [{ value: LOCAL, label: "Local cluster" }] : []),
-    ...saved.map((c) => ({ value: c.clusterId, label: c.clusterId })),
+    ...(mine.data ?? []).map((c) => ({ value: c.clusterId, label: c.clusterId })),
   ];
   if (cluster && !options.some((o) => o.value === cluster)) options.push({ value: cluster, label: cluster });
 
@@ -57,6 +58,8 @@ function StatusRow({ label, state }: { label: string; state?: string }) {
 export default function Layout() {
   const { cluster } = useParams();
   const health = useHealth();
+  const me = useMe();
+  const accounts = (health.data?.authProviders?.length ?? 0) > 0;
   const base = cluster ? `/c/${encodeURIComponent(cluster)}` : null;
 
   const nav = [
@@ -99,7 +102,20 @@ export default function Layout() {
           ))}
         </nav>
 
-        <div className="mt-auto hidden space-y-1.5 border-t border-line pt-4 md:block">
+        {me.data ? (
+          <div className="border-t border-line pt-3 md:mt-auto">
+            <UserBadge user={me.data} />
+          </div>
+        ) : (
+          accounts &&
+          me.data === null && (
+            <NavLink to="/connect" className="flex items-center gap-2 border-t border-line pt-3 text-sm text-muted hover:text-fg md:mt-auto">
+              <LogIn className="size-4" /> Sign in
+            </NavLink>
+          )
+        )}
+
+        <div className={cx("hidden space-y-1.5 border-t border-line pt-4 md:block", !(me.data || (accounts && me.data === null)) && "mt-auto")}>
           <StatusRow label="API" state={health.isError ? "unavailable" : health.data ? "ok" : undefined} />
           <StatusRow label="AI service" state={health.data?.ai} />
           <StatusRow label="History DB" state={health.data?.store} />

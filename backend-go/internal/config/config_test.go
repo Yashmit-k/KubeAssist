@@ -278,3 +278,35 @@ func TestLoad_LocalModeEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_AuthDefaultsAndOverrides(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthDevLogin || cfg.GitHubClientID != "" || cfg.TrustProxyHeaders {
+		t.Error("dev login, GitHub and proxy trust must be off by default")
+	}
+	if cfg.PublicURL != "http://localhost:5173" || cfg.SessionTTL != 30*24*time.Hour || cfg.MaxClustersPerUser != 10 {
+		t.Errorf("unexpected auth defaults: %+v", cfg)
+	}
+	if cfg.RateLimitRegister != "10/h" || cfg.RateLimitTroubleshoot != "30/m" {
+		t.Errorf("unexpected rate limit defaults: %q %q", cfg.RateLimitRegister, cfg.RateLimitTroubleshoot)
+	}
+
+	t.Setenv("AUTH_DEV_LOGIN", "true")
+	t.Setenv("MAX_CLUSTERS_PER_USER", "0")
+	t.Setenv("SESSION_TTL", "12h")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AuthDevLogin || cfg.MaxClustersPerUser != 0 || cfg.SessionTTL != 12*time.Hour {
+		t.Errorf("overrides not applied: %+v", cfg)
+	}
+
+	t.Setenv("MAX_CLUSTERS_PER_USER", "lots")
+	if _, err := Load(); err == nil {
+		t.Error("non-numeric MAX_CLUSTERS_PER_USER must fail")
+	}
+}

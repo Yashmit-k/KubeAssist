@@ -1,5 +1,6 @@
 // Package store persists investigations (a saved snapshot + diagnosis
-// pair) and remote-cluster registrations to Postgres.
+// pair), remote-cluster registrations, and user accounts and sessions to
+// Postgres.
 //
 // We use database/sql with the pgx driver and plain SQL rather than an
 // ORM: there are two small tables, and the nested snapshot/diagnosis
@@ -19,6 +20,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/tunnel"
 )
 
 // LocalCluster is the cluster key for investigations of the backend's
@@ -99,6 +101,29 @@ CREATE TABLE IF NOT EXISTS clusters (
     token_hash TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider TEXT NOT NULL,
+    provider_user_id TEXT NOT NULL,
+    login TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    avatar_url TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_login_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (provider, provider_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
+
+ALTER TABLE clusters ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_clusters_owner ON clusters (owner_id);
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("store: running migration: %w", err)
@@ -212,10 +237,12 @@ func (s *Store) DeleteForCluster(ctx context.Context, clusterID string) error {
 
 // --- tunnel.ClusterStore implementation ---
 
-// SaveCluster persists a registration (token hash only).
-func (s *Store) SaveCluster(ctx context.Context, clusterID, tokenHash string) error {
+// SaveCluster persists a registration (token hash only). An empty
+// ownerID stores NULL (operator-only cluster).
+func (s *Store) SaveCluster(ctx context.Context, clusterID, tokenHash, ownerID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO clusters (cluster_id, token_hash) VALUES ($1, $2)`, clusterID, tokenHash)
+		`INSERT INTO clusters (cluster_id, token_hash, owner_id) VALUES ($1, $2, NULLIF($3, '')::uuid)`,
+		clusterID, tokenHash, ownerID)
 	if err != nil {
 		return fmt.Errorf("store: saving cluster: %w", err)
 	}
@@ -238,20 +265,76 @@ func (s *Store) DeleteCluster(ctx context.Context, clusterID string) error {
 	return tx.Commit()
 }
 
-// LoadClusters returns every persisted clusterID -> token hash.
-func (s *Store) LoadClusters(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT cluster_id, token_hash FROM clusters`)
+// LoadClusters returns every persisted registration.
+func (s *Store) LoadClusters(ctx context.Context) (map[string]tunnel.StoredCluster, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT cluster_id, token_hash, COALESCE(owner_id::text, '') FROM clusters`)
 	if err != nil {
 		return nil, fmt.Errorf("store: loading clusters: %w", err)
 	}
 	defer rows.Close()
-	out := make(map[string]string)
+	out := make(map[string]tunnel.StoredCluster)
 	for rows.Next() {
-		var id, hash string
-		if err := rows.Scan(&id, &hash); err != nil {
+		var id string
+		var c tunnel.StoredCluster
+		if err := rows.Scan(&id, &c.TokenHash, &c.OwnerID); err != nil {
 			return nil, err
 		}
-		out[id] = hash
+		out[id] = c
 	}
 	return out, rows.Err()
+}
+
+// --- auth.Store implementation ---
+
+// UpsertUser creates or refreshes the user identified by (Provider,
+// ProviderUserID).
+func (s *Store) UpsertUser(ctx context.Context, u model.User) (model.User, error) {
+	err := s.db.QueryRowContext(ctx,
+		`INSERT INTO users (provider, provider_user_id, login, name, avatar_url)
+		 VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (provider, provider_user_id) DO UPDATE
+		   SET login = EXCLUDED.login, name = EXCLUDED.name, avatar_url = EXCLUDED.avatar_url, last_login_at = now()
+		 RETURNING id::text`,
+		u.Provider, u.ProviderUserID, u.Login, u.Name, u.AvatarURL,
+	).Scan(&u.ID)
+	if err != nil {
+		return model.User{}, fmt.Errorf("store: upserting user: %w", err)
+	}
+	return u, nil
+}
+
+// CreateSession stores a session (by token hash) and sweeps expired ones.
+func (s *Store) CreateSession(ctx context.Context, tokenHash, userID string, expiresAt time.Time) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < now()`); err != nil {
+		return fmt.Errorf("store: sweeping sessions: %w", err)
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)`, tokenHash, userID, expiresAt)
+	if err != nil {
+		return fmt.Errorf("store: creating session: %w", err)
+	}
+	return nil
+}
+
+// SessionUser returns the user behind a live session, or (nil, nil).
+func (s *Store) SessionUser(ctx context.Context, tokenHash string) (*model.User, error) {
+	var u model.User
+	err := s.db.QueryRowContext(ctx,
+		`SELECT u.id::text, u.provider, u.provider_user_id, u.login, u.name, u.avatar_url
+		 FROM sessions s JOIN users u ON u.id = s.user_id
+		 WHERE s.token_hash = $1 AND s.expires_at > now()`, tokenHash,
+	).Scan(&u.ID, &u.Provider, &u.ProviderUserID, &u.Login, &u.Name, &u.AvatarURL)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: reading session: %w", err)
+	}
+	return &u, nil
+}
+
+// DeleteSession ends a session (logout).
+func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = $1`, tokenHash)
+	return err
 }

@@ -11,8 +11,9 @@ The KubeAssist hub: the only component that talks to Kubernetes, the AI service,
 | `internal/redact` | Secret scrubbing for every free-text field |
 | `internal/api` | HTTP handlers; one troubleshoot pipeline shared by POST/SSE and local/remote (`clusterSource`); detector-only playbook |
 | `internal/ai` | Client for `POST /ai/troubleshoot` with timeout, one retry on 429/5xx, backoff + jitter |
-| `internal/store` | Postgres: cluster-scoped investigations, cluster registrations (token hashes) |
-| `internal/tunnel` | Relay hub: agent WebSockets, job routing by ID, keepalive, token verification |
+| `internal/auth` | Accounts: GitHub OAuth (state + PKCE), dev sign-in, cookie sessions (hashed), trusted-origin checks |
+| `internal/store` | Postgres: cluster-scoped investigations, cluster registrations (token hashes + owner), users, sessions |
+| `internal/tunnel` | Relay hub: agent WebSockets, job routing by ID, keepalive, agent token verification, cluster ownership |
 | `internal/model` | Go mirror of `/schemas` (1.1.0) |
 
 ```bash

@@ -1,24 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Download, KeyRound, Loader2, PlugZap, ShieldCheck, Trash2 } from "lucide-react";
+import { CheckCircle2, Download, Loader2, LogIn, PlugZap, ShieldCheck, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useHealth } from "../components/Layout";
+import SignIn, { authErrorMessage } from "../components/SignIn";
 import { Badge, Button, buttonClass, Card, Command, CopyButton, Dot, Empty, ErrorBox, PageHeader, Spinner } from "../components/ui";
-import { api, ApiError } from "../lib/api";
-import { savedClusters, useSavedClusters, type SavedCluster } from "../lib/clusters";
+import { api } from "../lib/api";
+import { useMe, useMyClusters } from "../lib/clusters";
 import { age } from "../lib/format";
-import type { RegisteredCluster } from "../lib/types";
+import type { ClusterStatus, RegisteredCluster } from "../lib/types";
 
 const ID_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
-
-function useStatus(c: SavedCluster, poll: number | false) {
-  return useQuery({
-    queryKey: ["remote-status", c.clusterId],
-    queryFn: () => api.remoteStatus({ kind: "remote", clusterId: c.clusterId, token: c.token }),
-    refetchInterval: poll,
-    retry: false,
-  });
-}
 
 function download(filename: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: "application/yaml" }));
@@ -28,8 +20,12 @@ function download(filename: string, text: string) {
 }
 
 function Registered({ reg }: { reg: RegisteredCluster }) {
-  const saved = { clusterId: reg.clusterId, token: reg.token, addedAt: "" };
-  const status = useStatus(saved, 3000);
+  const status = useQuery({
+    queryKey: ["remote-status", reg.clusterId],
+    queryFn: () => api.remoteStatus(reg.clusterId),
+    refetchInterval: 3000,
+    retry: false,
+  });
   const connected = status.data?.connected;
   const file = `kubeassist-agent-${reg.clusterId}.yaml`;
 
@@ -37,20 +33,10 @@ function Registered({ reg }: { reg: RegisteredCluster }) {
     <Card title={`Install the agent in “${reg.clusterId}”`}>
       <ol className="space-y-5">
         <li>
-          <div className="mb-1.5 text-sm font-medium">1. Keep your access token</div>
-          <p className="mb-2 text-sm text-muted">
-            It's saved in this browser and shown only once — the server keeps just a hash. You need it to open this cluster from another browser.
-          </p>
-          <div className="flex items-center gap-2 rounded-lg border border-line bg-surface-2 px-3 py-2">
-            <KeyRound className="size-4 shrink-0 text-faint" />
-            <code className="min-w-0 flex-1 truncate font-mono text-xs">{reg.token}</code>
-            <CopyButton text={reg.token} label="Copy" />
-          </div>
-        </li>
-        <li>
-          <div className="mb-1.5 text-sm font-medium">2. Apply the agent manifest</div>
+          <div className="mb-1.5 text-sm font-medium">1. Apply the agent manifest</div>
           <p className="mb-2 text-sm text-muted">
             Read-only RBAC (no Secrets, no writes). The agent connects outbound to <code className="font-mono text-xs">{reg.relayUrl}</code>; nothing in your cluster is exposed.
+            The manifest contains the agent's own token — it's shown only now, so apply it (or save the file) before leaving this page.
           </p>
           <div className="mb-2 flex flex-wrap gap-2">
             <Button onClick={() => download(file, reg.manifest)}>
@@ -65,7 +51,7 @@ function Registered({ reg }: { reg: RegisteredCluster }) {
           </details>
         </li>
         <li>
-          <div className="mb-1.5 text-sm font-medium">3. Wait for it to connect</div>
+          <div className="mb-1.5 text-sm font-medium">2. Wait for it to connect</div>
           {connected ? (
             <div className="flex flex-wrap items-center gap-3">
               <Badge tone="ok">
@@ -86,19 +72,17 @@ function Registered({ reg }: { reg: RegisteredCluster }) {
   );
 }
 
-function SavedRow({ c }: { c: SavedCluster }) {
-  const status = useStatus(c, 15_000);
+function ClusterRow({ c }: { c: ClusterStatus }) {
   const qc = useQueryClient();
   const revoke = useMutation({
-    mutationFn: () => api.revokeCluster({ kind: "remote", clusterId: c.clusterId, token: c.token }),
+    mutationFn: () => api.revokeCluster(c.clusterId),
     onSuccess: () => {
-      savedClusters.remove(c.clusterId);
-      void qc.invalidateQueries({ queryKey: ["remote-status", c.clusterId] });
+      void qc.invalidateQueries({ queryKey: ["clusters"] });
+      qc.removeQueries({ queryKey: ["remote-status", c.clusterId] });
     },
   });
-  const invalid = status.error instanceof ApiError && status.error.status === 401;
-  const tone = invalid ? "bad" : status.data?.connected ? "ok" : status.isLoading ? "muted" : "warn";
-  const label = invalid ? "token rejected" : status.data?.connected ? `connected ${age(status.data.connectedAt)}` : status.isLoading ? "checking…" : "agent offline";
+  const tone = c.connected ? "ok" : "warn";
+  const label = c.connected ? `connected ${age(c.connectedAt)}` : "agent offline";
 
   return (
     <li className="flex flex-wrap items-center gap-3 px-4 py-3">
@@ -108,14 +92,10 @@ function SavedRow({ c }: { c: SavedCluster }) {
       </Link>
       <span className="text-xs text-muted">{label}</span>
       <span className="flex-1" />
-      <Button variant="ghost" className="text-xs" onClick={() => savedClusters.remove(c.clusterId)} title="Forget the token in this browser (the cluster stays registered)">
-        Forget
-      </Button>
       <Button
         variant="danger"
         className="text-xs"
         busy={revoke.isPending}
-        disabled={invalid}
         onClick={() => {
           if (confirm(`Revoke "${c.clusterId}"? The agent is disconnected, its token stops working and its history is deleted.`)) revoke.mutate();
         }}
@@ -127,57 +107,24 @@ function SavedRow({ c }: { c: SavedCluster }) {
   );
 }
 
-function AddExisting() {
-  const [id, setId] = useState("");
-  const [token, setToken] = useState("");
-  const add = useMutation({
-    mutationFn: async () => {
-      await api.remoteStatus({ kind: "remote", clusterId: id.trim(), token: token.trim() });
-      savedClusters.add(id.trim(), token.trim());
-    },
-  });
-  return (
-    <form
-      className="space-y-2"
-      onSubmit={(e) => {
-        e.preventDefault();
-        add.mutate();
-      }}
-    >
-      <div className="flex flex-wrap gap-2">
-        <input className="min-w-40 flex-1 rounded-lg border border-line bg-surface px-3 py-1.5 font-mono text-sm" placeholder="cluster id" value={id} onChange={(e) => setId(e.target.value)} />
-        <input
-          className="min-w-56 flex-[2] rounded-lg border border-line bg-surface px-3 py-1.5 font-mono text-sm"
-          type="password"
-          autoComplete="off"
-          placeholder="token"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-        />
-        <Button type="submit" busy={add.isPending} disabled={!id.trim() || !token.trim()}>
-          Add
-        </Button>
-      </div>
-      {add.isError && <ErrorBox error={add.error instanceof ApiError && add.error.status === 401 ? new Error("That token is not valid for this cluster.") : add.error} />}
-      {add.isSuccess && <p className="text-xs text-ok">Added.</p>}
-    </form>
-  );
-}
-
 export default function Connect() {
   const health = useHealth();
-  const saved = useSavedClusters();
+  const me = useMe();
+  const mine = useMyClusters();
+  const qc = useQueryClient();
+  const [params] = useSearchParams();
+  const authError = authErrorMessage(params.get("authError"));
   const [clusterId, setClusterId] = useState("");
   const [reg, setReg] = useState<RegisteredCluster | null>(null);
   const register = useMutation({
     mutationFn: (id: string) => api.registerCluster(id),
     onSuccess: (r) => {
-      savedClusters.add(r.clusterId, r.token);
       setReg(r);
+      void qc.invalidateQueries({ queryKey: ["clusters"] });
     },
   });
 
-  if (health.isLoading) return <Spinner />;
+  if (health.isLoading || me.isLoading) return <Spinner />;
   const relay = health.data?.relay;
   const valid = ID_RE.test(clusterId);
 
@@ -190,6 +137,13 @@ export default function Connect() {
           <Empty icon={<PlugZap className="size-8" />} title="Remote clusters are disabled on this backend">
             Start the Go backend with <code className="font-mono">ENABLE_RELAY=true</code> (and <code className="font-mono">RELAY_PUBLIC_URL</code>) to connect clusters through the agent.
           </Empty>
+        </Card>
+      ) : !me.data ? (
+        <Card title={<span className="flex items-center gap-2"><LogIn className="size-4" /> Sign in to connect a cluster</span>} className="max-w-lg">
+          <p className="mb-3 text-sm text-muted">Clusters belong to your account, so you can open them from any browser. Nobody else can see or query them.</p>
+          {authError && <div className="mb-3"><ErrorBox error={new Error(authError)} /></div>}
+          {me.isError && <div className="mb-3"><ErrorBox error={me.error} title="Could not check your session" /></div>}
+          <SignIn next="/connect" />
         </Card>
       ) : (
         <div className="grid gap-4 lg:grid-cols-5">
@@ -227,20 +181,20 @@ export default function Connect() {
                 </form>
               </Card>
             )}
-            <Card title="Already registered elsewhere?">
-              <p className="mb-3 text-sm text-muted">Add a cluster to this browser with its ID and token.</p>
-              <AddExisting />
-            </Card>
           </div>
 
           <div className="space-y-4 lg:col-span-2">
-            <Card title="Your clusters (this browser)" bodyClassName="p-0">
-              {saved.length === 0 ? (
+            <Card title="Your clusters" bodyClassName="p-0">
+              {mine.isLoading ? (
+                <Spinner />
+              ) : mine.isError ? (
+                <div className="p-4"><ErrorBox error={mine.error} /></div>
+              ) : !mine.data?.length ? (
                 <Empty title="None yet" />
               ) : (
                 <ul className="divide-y divide-line">
-                  {saved.map((c) => (
-                    <SavedRow key={c.clusterId} c={c} />
+                  {mine.data.map((c) => (
+                    <ClusterRow key={c.clusterId} c={c} />
                   ))}
                 </ul>
               )}
@@ -250,7 +204,7 @@ export default function Connect() {
                 <li>The agent dials out over a WebSocket — no inbound access to your cluster.</li>
                 <li>Its RBAC is get/list/watch only and excludes Secrets.</li>
                 <li>Logs and messages are redacted inside your cluster before they leave it.</li>
-                <li>Every API call for a cluster requires that cluster's token.</li>
+                <li>Only your signed-in account can query your clusters; the agent's token authenticates the agent alone.</li>
                 <li>Suggested commands are never executed — you run them.</li>
               </ul>
             </Card>

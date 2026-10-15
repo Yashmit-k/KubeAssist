@@ -4,7 +4,7 @@ All responses are JSON. Errors use one envelope: `{"code": "...", "message": "..
 
 Every pod route exists in two forms with identical behaviour:
 
-| Local cluster (local mode only) | Remote cluster (relay; `Authorization: Bearer <cluster token>`) |
+| Local cluster (local mode only) | Remote cluster (relay; session cookie of the cluster's owner) |
 | --- | --- |
 | `/api/namespaces` | `/api/remote/{clusterId}/namespaces` |
 | `/api/pods?namespace=` | `/api/remote/{clusterId}/pods?namespace=` |
@@ -16,8 +16,18 @@ Every pod route exists in two forms with identical behaviour:
 | `/api/investigations/{id}` | `/api/remote/{clusterId}/investigations/{id}` |
 
 With `ENABLE_LOCAL_MODE=false` the left column is not registered at all (404).
-Remote routes return `401 invalid_cluster_token` without the right token and
-`503 agent_not_connected` when the cluster's agent is offline.
+Local routes need no sign-in (local mode is single-operator).
+
+Remote routes are authorized on every request by the browser session (see
+[Accounts](#accounts)): `401 unauthenticated` when signed out,
+`404 cluster_not_found` when the cluster doesn't exist **or belongs to someone
+else** (the two are indistinguishable), and `503 agent_not_connected` when the
+cluster's agent is offline. An operator may instead send
+`Authorization: Bearer $ADMIN_TOKEN`, which reaches every cluster. Agent tokens
+authenticate agents only; they are not accepted on these routes.
+
+Troubleshoot routes (local and remote) are rate limited per user (per client IP
+when anonymous): `429 rate_limited` with a `Retry-After` header.
 
 ## Health
 
@@ -27,7 +37,9 @@ Remote routes return `401 invalid_cluster_token` without the right token and
 {"status":"ok","version":"v1.0.0","localMode":true,"relay":true,"ai":"ok","store":"ok","features":["local","remote","history"]}
 ```
 
-`ai` / `store` are `ok`, `unavailable` or `disabled`.
+`ai` / `store` are `ok`, `unavailable` or `disabled`. `features` may also include
+`accounts`; `authProviders` lists the enabled sign-in methods (`github`, `dev`),
+empty when the relay (and so accounts) is off.
 
 `GET /api/cluster` (local mode) — `{"name":"kind-kubeassist-dev","serverVersion":"v1.36.1"}`
 
@@ -113,30 +125,64 @@ comments are sent every 15 s.
 
 Requires `DATABASE_URL` (else `503 store_unavailable`). History is scoped per
 cluster: local history only through the local routes, a remote cluster's only
-with its token.
+for its owner.
 
 `GET .../investigations` → `[{"id","clusterId","namespace","podName","failureType","issueSummary","confidenceScore","mode","createdAt"}]`
 
 `GET .../investigations/{id}` → `{"id","clusterId","namespace","podName","snapshot":{...},"diagnosis":{...},"createdAt"}`
 
+## Accounts
+
+Enabled whenever the relay is (`ENABLE_RELAY=true`). Users sign in through an
+identity provider; KubeAssist stores no passwords. The session is an opaque
+random token in an `HttpOnly`, `SameSite=Lax` cookie (`kubeassist_session`, or
+`__Host-kubeassist_session` + `Secure` when `PUBLIC_URL` is https); only its
+SHA-256 hash is stored. Sessions last `SESSION_TTL` (30 days).
+
+State-changing requests that carry the cookie must come from a trusted
+`Origin` (the request's own host, `PUBLIC_URL`, or `CORS_ALLOWED_ORIGINS`),
+else `403 untrusted_origin`.
+
+`GET /api/auth/github/login?next=/connect` → `302` to GitHub (state + PKCE).
+GitHub redirects back to `GET /api/auth/github/callback`, which creates/updates
+the user (keyed by GitHub's numeric user ID), sets the session cookie and
+redirects to `PUBLIC_URL` + `next` (relative paths only). On failure it redirects
+to `PUBLIC_URL/connect?authError=<code>`.
+
+`POST /api/auth/dev-login` `{"login":"alice"}` → `200` user + cookie. Only when
+`AUTH_DEV_LOGIN=true`: signs anyone in as any username. Development/CI only;
+refused at startup when `PUBLIC_URL` is https.
+
+`GET /api/auth/me` → `{"id":"<uuid>","provider":"github","login":"octocat","name":"...","avatarUrl":"..."}`, or `401 unauthenticated`.
+
+`POST /api/auth/logout` → `204`; deletes the session and clears the cookie.
+
+Sign-in endpoints are rate limited per client IP (`RATE_LIMIT_LOGIN`).
+
 ## Remote clusters (ENABLE_RELAY=true)
 
-`POST /api/clusters` `{"clusterId":"prod-eu-1"}` → `201`
+`POST /api/clusters` `{"clusterId":"prod-eu-1"}` (signed in) → `201`
 
 ```json
-{"clusterId":"prod-eu-1","token":"<48 hex chars, shown once>","relayUrl":"wss://.../agent/connect","manifest":"<complete agent YAML>"}
+{"clusterId":"prod-eu-1","token":"<agent token, 48 hex chars, shown once>","relayUrl":"wss://.../agent/connect","manifest":"<complete agent YAML>"}
 ```
 
-IDs are DNS labels (`[a-z0-9-]`, ≤63). `409` if taken. Only a SHA-256 hash of
-the token is stored (Postgres when configured, so registrations survive restarts).
+The cluster is owned by the caller. IDs are DNS labels (`[a-z0-9-]`, ≤63) and
+globally unique: `409` if taken. `401` when signed out,
+`403 cluster_limit_reached` beyond `MAX_CLUSTERS_PER_USER`, `429 rate_limited`
+beyond `RATE_LIMIT_REGISTER` per user. The token is for the agent only (it is
+embedded in the manifest); only its SHA-256 hash is stored (Postgres when
+configured, so registrations survive restarts). With `ADMIN_TOKEN` instead of
+a session, the registration has no owner and only the operator can reach it.
+
+`GET /api/clusters` → the caller's clusters,
+`[{"clusterId":"...","connected":true,"connectedAt":"..."}]`. With
+`ADMIN_TOKEN`: every registration.
 
 `GET /api/remote/{clusterId}/status` → `{"clusterId":"...","connected":true,"connectedAt":"..."}`
 
-`DELETE /api/clusters/{clusterId}` (cluster token) → `204`; disconnects the agent,
-invalidates the token, deletes that cluster's history.
-
-`GET /api/clusters` lists every registration. Operator-only: requires
-`Authorization: Bearer $ADMIN_TOKEN` when set; otherwise only available in local mode.
+`DELETE /api/clusters/{clusterId}` (owner or admin) → `204`; disconnects the agent,
+invalidates its token, deletes that cluster's history.
 
 `GET /agent/connect` — the agent's WebSocket. Credentials in headers:
 `Authorization: Bearer <token>` and `X-Cluster-ID: <id>` (query params

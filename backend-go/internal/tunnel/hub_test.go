@@ -24,7 +24,7 @@ import (
 // real rather than trusting that code "should" work.
 func TestNewHub_NilTokensDoesNotPanic(t *testing.T) {
 	hub := NewHub(nil)
-	if _, err := hub.RegisterCluster("some-cluster"); err != nil {
+	if _, err := hub.RegisterCluster("some-cluster", "", 0); err != nil {
 		t.Fatalf("RegisterCluster after NewHub(nil) unexpected error: %v", err)
 	}
 }
@@ -39,11 +39,11 @@ func TestNewHub_NilTokensDoesNotPanic(t *testing.T) {
 func TestHub_VerifyToken_CrossCustomerIsolation(t *testing.T) {
 	hub := NewHub(nil)
 
-	tokenA, err := hub.RegisterCluster("customer-a-cluster")
+	tokenA, err := hub.RegisterCluster("customer-a-cluster", "", 0)
 	if err != nil {
 		t.Fatalf("RegisterCluster(a) unexpected error: %v", err)
 	}
-	tokenB, err := hub.RegisterCluster("customer-b-cluster")
+	tokenB, err := hub.RegisterCluster("customer-b-cluster", "", 0)
 	if err != nil {
 		t.Fatalf("RegisterCluster(b) unexpected error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestHub_VerifyToken_CrossCustomerIsolation(t *testing.T) {
 
 func TestHub_VerifyToken_EdgeCases(t *testing.T) {
 	hub := NewHub(nil)
-	token, err := hub.RegisterCluster("test-cluster")
+	token, err := hub.RegisterCluster("test-cluster", "", 0)
 	if err != nil {
 		t.Fatalf("RegisterCluster unexpected error: %v", err)
 	}
@@ -97,28 +97,28 @@ func TestHub_VerifyToken_EdgeCases(t *testing.T) {
 func TestHub_RegisterCluster_PreventsDuplicateRegistration(t *testing.T) {
 	hub := NewHub(nil)
 
-	if _, err := hub.RegisterCluster("my-cluster"); err != nil {
+	if _, err := hub.RegisterCluster("my-cluster", "", 0); err != nil {
 		t.Fatalf("first registration unexpected error: %v", err)
 	}
 
 	// Re-registering an EXISTING clusterID must fail — silently
 	// succeeding would invalidate whatever token an already-connected
 	// agent is using, disconnecting them without warning.
-	if _, err := hub.RegisterCluster("my-cluster"); err == nil {
+	if _, err := hub.RegisterCluster("my-cluster", "", 0); err == nil {
 		t.Error("expected an error re-registering an already-registered clusterID, got nil")
 	}
 }
 
 func TestHub_RegisterCluster_RejectsEmptyClusterID(t *testing.T) {
 	hub := NewHub(nil)
-	if _, err := hub.RegisterCluster(""); err == nil {
+	if _, err := hub.RegisterCluster("", "", 0); err == nil {
 		t.Error("expected an error registering an empty clusterID, got nil")
 	}
 }
 
 func TestHub_ListClusters_NeverExposesTokens(t *testing.T) {
 	hub := NewHub(nil)
-	token, _ := hub.RegisterCluster("test-cluster")
+	token, _ := hub.RegisterCluster("test-cluster", "", 0)
 
 	statuses := hub.ListClusters()
 	if len(statuses) != 1 {
@@ -137,13 +137,13 @@ func TestHub_ListClusters_NeverExposesTokens(t *testing.T) {
 // fakeStore is an in-memory ClusterStore.
 type fakeStore struct {
 	mu   sync.Mutex
-	rows map[string]string
+	rows map[string]StoredCluster
 }
 
-func (f *fakeStore) SaveCluster(_ context.Context, id, hash string) error {
+func (f *fakeStore) SaveCluster(_ context.Context, id, hash, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.rows[id] = hash
+	f.rows[id] = StoredCluster{TokenHash: hash, OwnerID: owner}
 	return nil
 }
 func (f *fakeStore) DeleteCluster(_ context.Context, id string) error {
@@ -152,10 +152,10 @@ func (f *fakeStore) DeleteCluster(_ context.Context, id string) error {
 	delete(f.rows, id)
 	return nil
 }
-func (f *fakeStore) LoadClusters(context.Context) (map[string]string, error) {
+func (f *fakeStore) LoadClusters(context.Context) (map[string]StoredCluster, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := map[string]string{}
+	out := map[string]StoredCluster{}
 	for k, v := range f.rows {
 		out[k] = v
 	}
@@ -166,16 +166,16 @@ func (f *fakeStore) LoadClusters(context.Context) (map[string]string, error) {
 // store accepts the token issued by the first — and the store only ever
 // saw a hash, never the token.
 func TestHub_RegistrationsSurviveRestart(t *testing.T) {
-	st := &fakeStore{rows: map[string]string{}}
+	st := &fakeStore{rows: map[string]StoredCluster{}}
 	h1 := NewHub(nil)
 	if err := h1.AttachStore(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
-	token, err := h1.RegisterCluster("prod")
+	token, err := h1.RegisterCluster("prod", "user-1", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.rows["prod"] == token || st.rows["prod"] != HashToken(token) {
+	if st.rows["prod"].TokenHash == token || st.rows["prod"].TokenHash != HashToken(token) {
 		t.Fatal("store must hold the token hash, not the token")
 	}
 
@@ -186,6 +186,9 @@ func TestHub_RegistrationsSurviveRestart(t *testing.T) {
 	if !h2.VerifyToken("prod", token) {
 		t.Error("token should verify after restart")
 	}
+	if owner, ok := h2.Owner("prod"); !ok || owner != "user-1" {
+		t.Errorf("ownership should survive restart, got %q %v", owner, ok)
+	}
 	if err := h2.RevokeCluster("prod"); err != nil {
 		t.Fatal(err)
 	}
@@ -194,10 +197,41 @@ func TestHub_RegistrationsSurviveRestart(t *testing.T) {
 	}
 }
 
+func TestHub_OwnershipAndPerOwnerLimit(t *testing.T) {
+	hub := NewHub(map[string]string{"seeded": "tok"})
+	for _, id := range []string{"a1", "a2"} {
+		if _, err := hub.RegisterCluster(id, "alice", 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := hub.RegisterCluster("a3", "alice", 2); !errors.Is(err, ErrTooManyClusters) {
+		t.Errorf("third cluster should hit the limit, got %v", err)
+	}
+	if _, err := hub.RegisterCluster("b1", "bob", 2); err != nil {
+		t.Errorf("limit is per owner: %v", err)
+	}
+	if _, err := hub.RegisterCluster("b1", "bob", 2); !errors.Is(err, ErrAlreadyRegistered) {
+		t.Errorf("duplicate should be ErrAlreadyRegistered, got %v", err)
+	}
+	got := hub.ListClustersOwnedBy("alice")
+	if len(got) != 2 || got[0].ClusterID != "a1" || got[1].ClusterID != "a2" {
+		t.Errorf("alice's clusters = %+v", got)
+	}
+	if len(hub.ListClustersOwnedBy("")) != 0 {
+		t.Error("empty owner must match nothing (seeded clusters are operator-only)")
+	}
+	if owner, ok := hub.Owner("seeded"); !ok || owner != "" {
+		t.Errorf("seeded cluster should exist with no owner, got %q %v", owner, ok)
+	}
+	if len(hub.ListClusters()) != 4 {
+		t.Errorf("operator listing should include everything")
+	}
+}
+
 func TestHub_RejectsInvalidClusterIDs(t *testing.T) {
 	hub := NewHub(nil)
 	for _, id := range []string{"UPPER", "has space", "-leading", "trailing-", "a_b", strings.Repeat("a", 64)} {
-		if _, err := hub.RegisterCluster(id); err == nil {
+		if _, err := hub.RegisterCluster(id, "", 0); err == nil {
 			t.Errorf("RegisterCluster(%q) should fail", id)
 		}
 	}
@@ -208,7 +242,7 @@ func TestHub_RejectsInvalidClusterIDs(t *testing.T) {
 // NotFound mapping and disconnect handling.
 func TestHub_EndToEndOverWebSocket(t *testing.T) {
 	hub := NewHub(nil)
-	token, _ := hub.RegisterCluster("edge")
+	token, _ := hub.RegisterCluster("edge", "", 0)
 	srv := httptest.NewServer(http.HandlerFunc(hub.ServeAgentConnect))
 	defer srv.Close()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")

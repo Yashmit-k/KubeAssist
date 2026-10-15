@@ -16,6 +16,7 @@ import (
 
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/ai"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/api"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/auth"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/collector"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/config"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/k8s"
@@ -105,6 +106,48 @@ func main() {
 		log.Println("ENABLE_RELAY not set — remote-cluster relay disabled")
 	}
 
+	// Accounts gate every remote cluster. They're only needed with the
+	// relay; local mode stays login-free (it's single-operator).
+	var authMgr *auth.Manager
+	if hub != nil {
+		var accounts auth.Store = auth.NewMemoryStore()
+		if st != nil {
+			accounts = st
+		} else {
+			log.Println("warning: accounts are kept in memory without DATABASE_URL — users and sessions are lost on restart")
+		}
+		authCfg := auth.Config{
+			PublicURL:      cfg.PublicURL,
+			TrustedOrigins: cfg.CORSAllowedOrigins,
+			SessionTTL:     cfg.SessionTTL,
+			DevLogin:       cfg.AuthDevLogin,
+		}
+		if cfg.GitHubClientID != "" || cfg.GitHubClientSecret != "" {
+			authCfg.GitHub = &auth.GitHubConfig{ClientID: cfg.GitHubClientID, ClientSecret: cfg.GitHubClientSecret}
+		}
+		authMgr, err = auth.NewManager(accounts, authCfg)
+		if err != nil {
+			log.Fatalf("auth: %v", err)
+		}
+		switch providers := authMgr.Providers(); {
+		case len(providers) == 0:
+			log.Println("warning: no sign-in method configured (set GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET) — nobody can register clusters; only ADMIN_TOKEN reaches existing ones")
+		default:
+			log.Printf("accounts enabled; sign-in via %v (UI at %s)", providers, cfg.PublicURL)
+		}
+		if cfg.AuthDevLogin {
+			log.Println("WARNING: AUTH_DEV_LOGIN=true — anyone can sign in as any username. Never enable this on a reachable deployment.")
+		}
+	}
+
+	limiter := func(name, spec string) *api.RateLimiter {
+		l, err := api.ParseRateLimit(spec)
+		if err != nil {
+			log.Fatalf("config error: %s: %v", name, err)
+		}
+		return l
+	}
+
 	if !cfg.LocalModeEnabled && hub == nil {
 		log.Println("warning: both local mode and the relay are disabled — the API can only serve /api/health")
 	}
@@ -121,6 +164,12 @@ func main() {
 		AgentImage:          os.Getenv("AGENT_IMAGE"),
 		LocalModeEnabled:    cfg.LocalModeEnabled,
 		AdminToken:          cfg.AdminToken,
+		Auth:                authMgr,
+		MaxClustersPerUser:  cfg.MaxClustersPerUser,
+		RegisterLimiter:     limiter("RATE_LIMIT_REGISTER", cfg.RateLimitRegister),
+		TroubleshootLimiter: limiter("RATE_LIMIT_TROUBLESHOOT", cfg.RateLimitTroubleshoot),
+		LoginLimiter:        limiter("RATE_LIMIT_LOGIN", cfg.RateLimitLogin),
+		TrustProxyHeaders:   cfg.TrustProxyHeaders,
 	}
 
 	handler := api.NewCORSMiddleware(cfg.CORSAllowedOrigins)(api.RequestLogger(server.NewRouter()))

@@ -9,6 +9,7 @@ import type {
   Snapshot,
   StageEvent,
   TroubleshootResult,
+  User,
 } from "./types";
 
 // Empty base = same origin. In dev, Vite proxies /api to the Go backend;
@@ -29,27 +30,27 @@ export class ApiError extends Error {
 /**
  * A ClusterTarget is where a request goes: this backend's own cluster
  * ("local", under /api) or a remote cluster reached through its agent
- * (under /api/remote/{id}, authorized by that cluster's token).
+ * (under /api/remote/{id}). Remote requests are authorized by the
+ * HttpOnly session cookie — the browser never holds a cluster token.
  */
-export type ClusterTarget =
-  | { kind: "local" }
-  | { kind: "remote"; clusterId: string; token: string };
+export type ClusterTarget = { kind: "local" } | { kind: "remote"; clusterId: string };
 
 function prefix(t: ClusterTarget): string {
   return t.kind === "local" ? "/api" : `/api/remote/${encodeURIComponent(t.clusterId)}`;
 }
 
-function authHeaders(t?: ClusterTarget): Record<string, string> {
-  return t?.kind === "remote" ? { Authorization: `Bearer ${t.token}` } : {};
-}
+// "include" so the session cookie also travels when the UI is hosted on
+// a different origin of the same site (VITE_API_BASE_URL).
+const CREDENTIALS: RequestCredentials = "include";
 
-async function request<T>(path: string, init: RequestInit & { target?: ClusterTarget } = {}): Promise<T> {
-  const { target, headers, ...rest } = init;
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const { headers, ...rest } = init;
   let res: Response;
   try {
     res = await fetch(BASE + path, {
       ...rest,
-      headers: { ...(rest.body ? { "Content-Type": "application/json" } : {}), ...authHeaders(target), ...headers },
+      credentials: CREDENTIALS,
+      headers: { ...(rest.body ? { "Content-Type": "application/json" } : {}), ...headers },
     });
   } catch {
     throw new ApiError(0, "network_error", "Cannot reach the KubeAssist API. Is the backend running?");
@@ -75,31 +76,43 @@ export const api = {
   health: () => request<Health>("/api/health"),
   localCluster: () => request<ClusterInfo>("/api/cluster"),
 
-  namespaces: (t: ClusterTarget) => request<string[]>(`${prefix(t)}/namespaces`, { target: t }),
+  namespaces: (t: ClusterTarget) => request<string[]>(`${prefix(t)}/namespaces`),
   pods: (t: ClusterTarget, namespace?: string) =>
-    request<PodSummary[]>(`${prefix(t)}/pods${namespace ? `?namespace=${enc(namespace)}` : ""}`, { target: t }),
+    request<PodSummary[]>(`${prefix(t)}/pods${namespace ? `?namespace=${enc(namespace)}` : ""}`),
   pod: (t: ClusterTarget, ns: string, name: string) =>
-    request<Snapshot>(`${prefix(t)}/pods/${enc(ns)}/${enc(name)}`, { target: t }),
+    request<Snapshot>(`${prefix(t)}/pods/${enc(ns)}/${enc(name)}`),
   logs: (t: ClusterTarget, ns: string, name: string, container: string, previous: boolean) =>
     request<{ logs: string; unavailableReason?: string }>(
       `${prefix(t)}/pods/${enc(ns)}/${enc(name)}/logs?container=${enc(container)}&previous=${previous}`,
-      { target: t },
     ),
 
   investigations: (t: ClusterTarget, namespace?: string) =>
     request<InvestigationSummary[]>(
       `${prefix(t)}/investigations?limit=100${namespace ? `&namespace=${enc(namespace)}` : ""}`,
-      { target: t },
     ),
   investigation: (t: ClusterTarget, id: string) =>
-    request<Investigation>(`${prefix(t)}/investigations/${enc(id)}`, { target: t }),
+    request<Investigation>(`${prefix(t)}/investigations/${enc(id)}`),
 
+  /** The signed-in user, or null when signed out. */
+  me: async (): Promise<User | null> => {
+    try {
+      return await request<User>("/api/auth/me");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) return null;
+      throw e;
+    }
+  },
+  devLogin: (login: string) => request<User>("/api/auth/dev-login", { method: "POST", body: JSON.stringify({ login }) }),
+  logout: () => request<void>("/api/auth/logout", { method: "POST" }),
+  /** Full-page navigation target that starts an OAuth sign-in. */
+  loginUrl: (provider: string, next: string) => `${BASE}/api/auth/${enc(provider)}/login?next=${enc(next)}`,
+
+  /** The signed-in user's clusters. */
+  clusters: () => request<ClusterStatus[]>("/api/clusters"),
   registerCluster: (clusterId: string) =>
     request<RegisteredCluster>("/api/clusters", { method: "POST", body: JSON.stringify({ clusterId }) }),
-  remoteStatus: (t: Extract<ClusterTarget, { kind: "remote" }>) =>
-    request<ClusterStatus>(`${prefix(t)}/status`, { target: t }),
-  revokeCluster: (t: Extract<ClusterTarget, { kind: "remote" }>) =>
-    request<void>(`/api/clusters/${enc(t.clusterId)}`, { method: "DELETE", target: t }),
+  remoteStatus: (clusterId: string) => request<ClusterStatus>(`/api/remote/${enc(clusterId)}/status`),
+  revokeCluster: (clusterId: string) => request<void>(`/api/clusters/${enc(clusterId)}`, { method: "DELETE" }),
 };
 
 export type StreamHandlers = {
@@ -110,8 +123,8 @@ export type StreamHandlers = {
 
 /**
  * Runs a troubleshoot over Server-Sent Events. We use fetch + a stream
- * reader instead of EventSource because EventSource can only GET and
- * can't send an Authorization header, which remote clusters need.
+ * reader instead of EventSource because EventSource can only GET, and
+ * the remote stream route is POST-only.
  */
 export function troubleshootStream(
   t: ClusterTarget,
@@ -128,7 +141,8 @@ export function troubleshootStream(
     try {
       res = await fetch(`${BASE}${prefix(t)}/pods/${enc(ns)}/${enc(name)}/troubleshoot/stream`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "text/event-stream", ...authHeaders(t) },
+        credentials: CREDENTIALS,
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify(body),
         signal: ctrl.signal,
       });

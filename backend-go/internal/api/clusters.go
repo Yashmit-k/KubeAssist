@@ -1,8 +1,8 @@
 package api
 
 import (
-	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,11 +25,26 @@ type registerClusterResponse struct {
 	Manifest  string `json:"manifest"`
 }
 
-// handleRegisterCluster powers self-serve "Connect your cluster": the
-// caller picks a cluster ID and receives a fresh token plus an agent
-// manifest. The token is never retrievable again (GitHub-PAT style);
-// only its hash is stored.
+// handleRegisterCluster powers "Connect your cluster": a signed-in user
+// picks a cluster ID and receives an agent manifest embedding a fresh
+// agent token. The cluster belongs to that user. The token is only for
+// the agent and is never retrievable again; only its hash is stored.
+// AdminToken may also register (the cluster then has no owner and is
+// operator-only).
 func (s *Server) handleRegisterCluster(w http.ResponseWriter, r *http.Request) {
+	ownerID := ""
+	if !s.isAdmin(r) {
+		u, ok := s.requireUser(w, r)
+		if !ok {
+			return
+		}
+		if ok, wait := s.RegisterLimiter.Allow("user:" + u.ID); !ok {
+			writeRateLimited(w, wait)
+			return
+		}
+		ownerID = u.ID
+	}
+
 	var req registerClusterRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "could not parse request body")
@@ -49,10 +64,14 @@ func (s *Server) handleRegisterCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.Hub.RegisterCluster(req.ClusterID)
+	token, err := s.Hub.RegisterCluster(req.ClusterID, ownerID, s.MaxClustersPerUser)
 	if err != nil {
-		if strings.Contains(err.Error(), "already registered") {
-			writeError(w, http.StatusConflict, "cluster_already_registered", err.Error())
+		switch {
+		case errors.Is(err, tunnel.ErrAlreadyRegistered):
+			writeError(w, http.StatusConflict, "cluster_already_registered", "that cluster ID is taken; choose another")
+			return
+		case errors.Is(err, tunnel.ErrTooManyClusters):
+			writeError(w, http.StatusForbidden, "cluster_limit_reached", fmt.Sprintf("an account can register at most %d clusters; revoke one first", s.MaxClustersPerUser))
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "registration_failed", err.Error())
@@ -67,21 +86,18 @@ func (s *Server) handleRegisterCluster(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleListClusters lists every registered cluster. It's an operator
-// view: in a public deployment (local mode off) it requires ADMIN_TOKEN,
-// so customers can't enumerate each other's cluster IDs.
+// handleListClusters lists the caller's own clusters. With AdminToken
+// it lists every registration (operator view).
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case s.AdminToken != "":
-		if subtle.ConstantTimeCompare([]byte(bearerToken(r)), []byte(s.AdminToken)) != 1 {
-			writeError(w, http.StatusUnauthorized, "admin_token_required", "listing all clusters requires the admin token")
-			return
-		}
-	case !s.LocalModeEnabled:
-		writeError(w, http.StatusForbidden, "listing_disabled", "listing all clusters is disabled in multi-tenant mode (set ADMIN_TOKEN to enable it for operators)")
+	if s.isAdmin(r) {
+		writeJSON(w, http.StatusOK, s.Hub.ListClusters())
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Hub.ListClusters())
+	u, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Hub.ListClustersOwnedBy(u.ID))
 }
 
 func (s *Server) handleRemoteStatus(w http.ResponseWriter, r *http.Request, _ clusterSource, clusterID string) {
@@ -89,7 +105,7 @@ func (s *Server) handleRemoteStatus(w http.ResponseWriter, r *http.Request, _ cl
 }
 
 // handleRevokeCluster deletes a registration (and its history),
-// disconnecting the agent. Authorized by the cluster's own token.
+// disconnecting the agent. Authorized by ownership (see Server.remote).
 func (s *Server) handleRevokeCluster(w http.ResponseWriter, r *http.Request, _ clusterSource, clusterID string) {
 	if err := s.Hub.RevokeCluster(clusterID); err != nil {
 		writeError(w, http.StatusInternalServerError, "revoke_failed", err.Error())
