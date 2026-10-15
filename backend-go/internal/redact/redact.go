@@ -87,6 +87,13 @@ func Snapshot(s *model.DiagnosticSnapshot) *model.DiagnosticSnapshot {
 	redactContainers(s.Containers)
 	redactContainers(s.InitContainers)
 	s.UserQuestion = Text(s.UserQuestion)
+	// Detector evidence quotes event messages and log lines verbatim.
+	for i := range s.Detector.Evidence {
+		s.Detector.Evidence[i] = Text(s.Detector.Evidence[i])
+	}
+	for i := range s.Detector.RelatedHints {
+		s.Detector.RelatedHints[i] = Text(s.Detector.RelatedHints[i])
+	}
 
 	// last-applied-configuration embeds the whole manifest, including
 	// any literal env values — drop it rather than try to scrub it.

@@ -120,3 +120,11 @@ func TestSnapshot_RedactsInitContainersConditionsAndQuestion(t *testing.T) {
 		}
 	}
 }
+
+func TestSnapshot_RedactsDetectorEvidence(t *testing.T) {
+	s := &model.DiagnosticSnapshot{Detector: model.DetectorResult{Evidence: []string{"Log: login failed password=hunter2"}}}
+	Snapshot(s)
+	if strings.Contains(s.Detector.Evidence[0], "hunter2") {
+		t.Errorf("detector evidence not redacted: %q", s.Detector.Evidence[0])
+	}
+}

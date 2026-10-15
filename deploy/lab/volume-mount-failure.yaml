@@ -1,11 +1,12 @@
 # Deliberately references a ConfigMap that doesn't exist, so the pod
-# gets stuck Pending with a FailedMount event. Tests detect.detectVolumeMountFailure.
+# gets stuck Pending with a FailedMount event. Expected detector result: VolumeMountFailure.
 apiVersion: v1
 kind: Pod
 metadata:
-  name: volume-mount-failure-test
+  name: volume-mount-failure
+  namespace: kubeassist-lab
   labels:
-    app: volume-mount-failure-test
+    app: volume-mount-failure
 spec:
   containers:
     - name: app

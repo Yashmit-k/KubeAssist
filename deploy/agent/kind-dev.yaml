@@ -1,0 +1,90 @@
+# Runs the agent inside your local Kind cluster, dialing back out to a
+# backend on your machine — proves the relay loop end to end without a
+# second real cluster. Docker Desktop resolves host.docker.internal from
+# inside Kind pods.
+#
+#   make agent-kind          # builds the image, loads it into Kind,
+#                            # registers "kind-dev" and applies this file
+#
+# The token comes from POST /api/clusters (or AGENT_TOKENS on the
+# backend) and is stored in the kubeassist-agent-token Secret, which the
+# make target creates. Uses a locally loaded image (imagePullPolicy: Never).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubeassist
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeassist-agent
+  namespace: kubeassist
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeassist-agent-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "services", "configmaps", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeassist-agent-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeassist-agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: kubeassist-agent
+    namespace: kubeassist
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubeassist-agent
+  namespace: kubeassist
+  labels:
+    app: kubeassist-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubeassist-agent
+  template:
+    metadata:
+      labels:
+        app: kubeassist-agent
+    spec:
+      serviceAccountName: kubeassist-agent
+      containers:
+        - name: agent
+          image: kubeassist-agent:dev
+          imagePullPolicy: Never
+          env:
+            - name: RELAY_URL
+              value: "ws://host.docker.internal:8080/agent/connect"
+            - name: CLUSTER_ID
+              value: "kind-dev"
+            - name: AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kubeassist-agent-token
+                  key: AGENT_TOKEN
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }

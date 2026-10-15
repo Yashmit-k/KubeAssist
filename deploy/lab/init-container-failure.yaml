@@ -1,11 +1,12 @@
 # Init container always exits 1, so it never lets the main container
-# start. Tests detect.detectInitContainerFailure.
+# start. Expected detector result: InitContainerFailure.
 apiVersion: v1
 kind: Pod
 metadata:
-  name: init-container-failure-test
+  name: init-container-failure
+  namespace: kubeassist-lab
   labels:
-    app: init-container-failure-test
+    app: init-container-failure
 spec:
   initContainers:
     - name: wait-for-db

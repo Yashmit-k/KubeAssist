@@ -1,0 +1,6 @@
+# Lab: intentionally broken workloads, one per failure type.
+#   kubectl apply -f deploy/lab/
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubeassist-lab

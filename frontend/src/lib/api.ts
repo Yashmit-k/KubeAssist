@@ -1,0 +1,195 @@
+import type {
+  ClusterInfo,
+  ClusterStatus,
+  Health,
+  Investigation,
+  InvestigationSummary,
+  PodSummary,
+  RegisteredCluster,
+  Snapshot,
+  StageEvent,
+  TroubleshootResult,
+} from "./types";
+
+// Empty base = same origin. In dev, Vite proxies /api to the Go backend;
+// in the container image, nginx does. Set VITE_API_BASE_URL only when the
+// frontend is hosted separately from the API (e.g. Vercel + Fly.io).
+const BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "").replace(/\/$/, "");
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * A ClusterTarget is where a request goes: this backend's own cluster
+ * ("local", under /api) or a remote cluster reached through its agent
+ * (under /api/remote/{id}, authorized by that cluster's token).
+ */
+export type ClusterTarget =
+  | { kind: "local" }
+  | { kind: "remote"; clusterId: string; token: string };
+
+function prefix(t: ClusterTarget): string {
+  return t.kind === "local" ? "/api" : `/api/remote/${encodeURIComponent(t.clusterId)}`;
+}
+
+function authHeaders(t?: ClusterTarget): Record<string, string> {
+  return t?.kind === "remote" ? { Authorization: `Bearer ${t.token}` } : {};
+}
+
+async function request<T>(path: string, init: RequestInit & { target?: ClusterTarget } = {}): Promise<T> {
+  const { target, headers, ...rest } = init;
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, {
+      ...rest,
+      headers: { ...(rest.body ? { "Content-Type": "application/json" } : {}), ...authHeaders(target), ...headers },
+    });
+  } catch {
+    throw new ApiError(0, "network_error", "Cannot reach the KubeAssist API. Is the backend running?");
+  }
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    throw new ApiError(res.status, "invalid_json", `Unexpected response (${res.status}): ${text.slice(0, 160)}`);
+  }
+  if (!res.ok) {
+    const err = (body ?? {}) as { code?: string; message?: string };
+    throw new ApiError(res.status, err.code ?? `http_${res.status}`, err.message ?? `Request failed (${res.status})`);
+  }
+  return body as T;
+}
+
+const enc = encodeURIComponent;
+
+export const api = {
+  health: () => request<Health>("/api/health"),
+  localCluster: () => request<ClusterInfo>("/api/cluster"),
+
+  namespaces: (t: ClusterTarget) => request<string[]>(`${prefix(t)}/namespaces`, { target: t }),
+  pods: (t: ClusterTarget, namespace?: string) =>
+    request<PodSummary[]>(`${prefix(t)}/pods${namespace ? `?namespace=${enc(namespace)}` : ""}`, { target: t }),
+  pod: (t: ClusterTarget, ns: string, name: string) =>
+    request<Snapshot>(`${prefix(t)}/pods/${enc(ns)}/${enc(name)}`, { target: t }),
+  logs: (t: ClusterTarget, ns: string, name: string, container: string, previous: boolean) =>
+    request<{ logs: string; unavailableReason?: string }>(
+      `${prefix(t)}/pods/${enc(ns)}/${enc(name)}/logs?container=${enc(container)}&previous=${previous}`,
+      { target: t },
+    ),
+
+  investigations: (t: ClusterTarget, namespace?: string) =>
+    request<InvestigationSummary[]>(
+      `${prefix(t)}/investigations?limit=100${namespace ? `&namespace=${enc(namespace)}` : ""}`,
+      { target: t },
+    ),
+  investigation: (t: ClusterTarget, id: string) =>
+    request<Investigation>(`${prefix(t)}/investigations/${enc(id)}`, { target: t }),
+
+  registerCluster: (clusterId: string) =>
+    request<RegisteredCluster>("/api/clusters", { method: "POST", body: JSON.stringify({ clusterId }) }),
+  remoteStatus: (t: Extract<ClusterTarget, { kind: "remote" }>) =>
+    request<ClusterStatus>(`${prefix(t)}/status`, { target: t }),
+  revokeCluster: (t: Extract<ClusterTarget, { kind: "remote" }>) =>
+    request<void>(`/api/clusters/${enc(t.clusterId)}`, { method: "DELETE", target: t }),
+};
+
+export type StreamHandlers = {
+  onStage: (e: StageEvent) => void;
+  onDone: (r: TroubleshootResult) => void;
+  onError: (e: ApiError) => void;
+};
+
+/**
+ * Runs a troubleshoot over Server-Sent Events. We use fetch + a stream
+ * reader instead of EventSource because EventSource can only GET and
+ * can't send an Authorization header, which remote clusters need.
+ */
+export function troubleshootStream(
+  t: ClusterTarget,
+  ns: string,
+  name: string,
+  body: { question?: string; serviceName?: string },
+  h: StreamHandlers,
+): () => void {
+  const ctrl = new AbortController();
+  let finished = false;
+
+  (async () => {
+    let res: Response;
+    try {
+      res = await fetch(`${BASE}${prefix(t)}/pods/${enc(ns)}/${enc(name)}/troubleshoot/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream", ...authHeaders(t) },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+    } catch {
+      if (!ctrl.signal.aborted) h.onError(new ApiError(0, "network_error", "Cannot reach the KubeAssist API."));
+      return;
+    }
+    if (!res.ok || !res.body) {
+      const text = await res.text().catch(() => "");
+      let code = `http_${res.status}`;
+      let message = `Request failed (${res.status})`;
+      try {
+        const j = JSON.parse(text) as { code?: string; message?: string };
+        code = j.code ?? code;
+        message = j.message ?? message;
+      } catch {
+        /* not JSON */
+      }
+      h.onError(new ApiError(res.status, code, message));
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let sep: number;
+        while ((sep = buf.indexOf("\n\n")) !== -1) {
+          const raw = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          let event = "message";
+          const data: string[] = [];
+          for (const line of raw.split("\n")) {
+            if (line.startsWith(":")) continue; // keepalive comment
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+          }
+          if (!data.length) continue;
+          const payload = JSON.parse(data.join("\n"));
+          if (event === "done") {
+            finished = true;
+            h.onDone(payload as TroubleshootResult);
+          } else if (event === "error") {
+            finished = true;
+            h.onError(new ApiError(500, payload.code ?? "error", payload.message ?? "Troubleshoot failed"));
+          } else {
+            h.onStage(payload as StageEvent);
+          }
+        }
+      }
+      if (!finished && !ctrl.signal.aborted) {
+        h.onError(new ApiError(0, "stream_closed", "The connection closed before the diagnosis finished."));
+      }
+    } catch (e) {
+      if (!ctrl.signal.aborted) h.onError(new ApiError(0, "stream_error", e instanceof Error ? e.message : String(e)));
+    }
+  })();
+
+  return () => ctrl.abort();
+}

@@ -16,6 +16,7 @@ package detect
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
@@ -52,6 +53,11 @@ func Detect(s *model.DiagnosticSnapshot) model.DetectorResult {
 
 	for _, check := range checks {
 		if result := check(s); result != nil {
+			switch result.FailureType {
+			case "CrashLoopBackOff", "InitContainerFailure", "ProbeFailure", "OOMKilled", "ReadinessFailure":
+				// Process-level failures: the logs usually say why.
+				result = withLogEvidence(result, s)
+			}
 			return *result
 		}
 	}
@@ -60,29 +66,106 @@ func Detect(s *model.DiagnosticSnapshot) model.DetectorResult {
 }
 
 // DetectRelated runs AFTER pass-2 collection has populated
-// snapshot.Related, and can override an earlier "Healthy" verdict if a
-// service mismatch is found. This two-stage design mirrors the
-// collector's own two-pass algorithm (see the sequence diagram in the
-// plan): we don't fetch Services/Endpoints for every pod, only when
-// warranted, so detection has to be able to run twice too.
+// snapshot.Related. It never overrides a pod-level failure — a crashing
+// or misconfigured pod is the problem regardless of its Services — it
+// only (a) adds ConfigMap key evidence to CreateContainerConfigError and
+// (b) refines Healthy/Unknown into ServiceSelectorMismatch when a
+// Service intended for this pod selects nothing.
 func DetectRelated(s *model.DiagnosticSnapshot, core model.DetectorResult) model.DetectorResult {
 	if s.Related == nil {
 		return core
 	}
-	for _, svc := range s.Related.Services {
-		if svc.EndpointsReady == 0 && !podMatchesSelector(s.Pod.Labels, svc.Selector) {
-			return model.DetectorResult{
-				FailureType: "ServiceSelectorMismatch",
-				Confidence:  0.85,
-				Evidence: []string{
-					fmt.Sprintf("Service %q has 0 ready endpoints", svc.Name),
-					fmt.Sprintf("Service selector %v does not match pod labels %v", svc.Selector, s.Pod.Labels),
-				},
-				SearchTerms: []string{"service selector mismatch", "endpoints", "service discovery"},
+
+	if core.FailureType == "CreateContainerConfigError" {
+		out := core
+		out.Evidence = append([]string{}, core.Evidence...)
+		for _, ref := range s.Related.ConfigMapRefs {
+			if len(ref.KeysMissing) > 0 {
+				out.Evidence = append(out.Evidence, fmt.Sprintf("ConfigMap %q is missing key(s) %v (present: %v)", ref.Name, ref.KeysMissing, ref.KeysPresent))
 			}
 		}
+		return out
 	}
-	return core
+
+	mismatch := findSelectorMismatch(s)
+	if mismatch == nil {
+		return core
+	}
+	if core.FailureType != "Healthy" && core.FailureType != "Unknown" && core.FailureType != "" {
+		// Pod-level failure wins; keep the Service finding as a hint.
+		out := core
+		out.RelatedHints = append(append([]string{}, core.RelatedHints...), mismatch.Evidence...)
+		return out
+	}
+	return *mismatch
+}
+
+// findSelectorMismatch decides whether a Service that should route to
+// this pod doesn't. Services in a namespace usually belong to OTHER
+// workloads, so "some Service has zero endpoints" is not evidence on its
+// own. We report a mismatch when:
+//   - the caller named a Service explicitly and it doesn't select the pod; or
+//   - no Service selects the pod at all, and a Service with zero ready
+//     endpoints shares a selector key with the pod's labels (the classic
+//     typo'd or renamed label value).
+func findSelectorMismatch(s *model.DiagnosticSnapshot) *model.DetectorResult {
+	labels := s.Pod.Labels
+	result := func(svc model.ServiceSummary, confidence float64, why string) *model.DetectorResult {
+		return &model.DetectorResult{
+			FailureType: "ServiceSelectorMismatch",
+			Confidence:  confidence,
+			Evidence: []string{
+				fmt.Sprintf("Service %q has %d ready endpoints", svc.Name, svc.EndpointsReady),
+				fmt.Sprintf("Service selector %v does not match pod labels %v", svc.Selector, labels),
+				why,
+			},
+			SearchTerms: []string{"service selector mismatch", "endpoints", "service discovery", "labels"},
+		}
+	}
+
+	if s.ServiceName != nil && *s.ServiceName != "" {
+		for _, svc := range s.Related.Services {
+			if svc.Name == *s.ServiceName && !podMatchesSelector(labels, svc.Selector) {
+				return result(svc, 0.9, fmt.Sprintf("Service %q was named in the request as the one that should reach this pod", svc.Name))
+			}
+		}
+		return nil
+	}
+
+	for _, svc := range s.Related.Services {
+		if podMatchesSelector(labels, svc.Selector) {
+			return nil // something already routes to this pod
+		}
+	}
+
+	var best *model.ServiceSummary
+	bestScore := 0
+	for i := range s.Related.Services {
+		svc := s.Related.Services[i]
+		if svc.EndpointsReady != 0 {
+			continue
+		}
+		score := 0
+		for k, v := range svc.Selector {
+			if lv, ok := labels[k]; ok {
+				score++
+				if lv == v || strings.Contains(lv, v) || strings.Contains(v, lv) {
+					score++ // near-miss values (prefix/suffix typos) are stronger evidence
+				}
+			}
+		}
+		if score > bestScore {
+			best, bestScore = &svc, score
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	confidence := 0.7
+	if bestScore >= 2 {
+		confidence = 0.85
+	}
+	return result(*best, confidence, "No Service in the namespace selects this pod, and this one shares selector keys with its labels")
 }
 
 // detectEvicted checks for NODE-level eviction — Kubernetes sets
@@ -442,4 +525,43 @@ func podMatchesSelector(labels, selector map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// errorLinePattern matches log lines that typically explain an exit.
+var errorLinePattern = regexp.MustCompile(`(?i)\b(fatal|panic|error|exception|traceback|failed|unable to|cannot|could not|refused|denied|not found|no such)\b`)
+
+// lastErrorLogLine returns the last log line that looks like the reason
+// a process exited, preferring the previous (crashed) instance's logs.
+// It's deterministic evidence: an actual line from the snapshot, never
+// a summary.
+func lastErrorLogLine(s *model.DiagnosticSnapshot) string {
+	sources := []string{}
+	if s.Logs.Previous != nil {
+		sources = append(sources, *s.Logs.Previous)
+	}
+	sources = append(sources, s.Logs.Current)
+	for _, text := range sources {
+		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+		for i := len(lines) - 1; i >= 0 && i >= len(lines)-50; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line != "" && errorLinePattern.MatchString(line) {
+				if len(line) > 240 {
+					line = line[:240] + "…"
+				}
+				return line
+			}
+		}
+	}
+	return ""
+}
+
+// withLogEvidence appends the most relevant error log line, if any.
+func withLogEvidence(r *model.DetectorResult, s *model.DiagnosticSnapshot) *model.DetectorResult {
+	if r == nil {
+		return nil
+	}
+	if line := lastErrorLogLine(s); line != "" {
+		r.Evidence = append(r.Evidence, "Log: "+line)
+	}
+	return r
 }

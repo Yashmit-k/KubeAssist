@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
@@ -297,5 +298,78 @@ func TestDetect_InitContainerFailureTakesPriority(t *testing.T) {
 	got := Detect(snapshot)
 	if got.FailureType != "InitContainerFailure" {
 		t.Errorf("Detect() FailureType = %q, want %q — init container failure should take priority", got.FailureType, "InitContainerFailure")
+	}
+}
+
+// Regression tests from live Kind testing: unrelated zero-endpoint
+// Services in the same namespace must not be blamed.
+
+func TestDetectRelated_IgnoresUnrelatedServicesWhenPodIsServed(t *testing.T) {
+	snapshot := &model.DiagnosticSnapshot{
+		Pod:        model.PodInfo{Phase: "Running", Labels: map[string]string{"app": "healthy-app"}},
+		Containers: []model.ContainerInfo{{Name: "web", Ready: true, State: model.ContainerState{Phase: "running"}}},
+		Related: &model.RelatedInfo{Services: []model.ServiceSummary{
+			{Name: "healthy-app", Selector: map[string]string{"app": "healthy-app"}, EndpointsReady: 1},
+			{Name: "broken-service", Selector: map[string]string{"app": "wrong-label"}, EndpointsReady: 0},
+		}},
+	}
+	if got := DetectRelated(snapshot, Detect(snapshot)).FailureType; got != "Healthy" {
+		t.Errorf("pod served by its own Service should stay Healthy, got %q", got)
+	}
+}
+
+func TestDetectRelated_PodLevelFailureWins(t *testing.T) {
+	snapshot := &model.DiagnosticSnapshot{
+		Pod: model.PodInfo{Phase: "Pending", Labels: map[string]string{"app": "missing-config-app"}},
+		Containers: []model.ContainerInfo{{Name: "app", State: model.ContainerState{
+			Phase: "waiting", Reason: "CreateContainerConfigError", Message: `couldn't find key DATABASE_URL in ConfigMap lab/application-config`,
+		}}},
+		Related: &model.RelatedInfo{
+			Services:      []model.ServiceSummary{{Name: "broken-service", Selector: map[string]string{"app": "wrong-label"}}},
+			ConfigMapRefs: []model.ConfigMapRef{{Name: "application-config", KeysPresent: []string{"LOG_LEVEL"}, KeysMissing: []string{"DATABASE_URL"}}},
+		},
+	}
+	got := DetectRelated(snapshot, Detect(snapshot))
+	if got.FailureType != "CreateContainerConfigError" {
+		t.Fatalf("pod-level failure must win, got %q", got.FailureType)
+	}
+	found := false
+	for _, e := range got.Evidence {
+		if strings.Contains(e, "DATABASE_URL") && strings.Contains(e, "application-config") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("pass-2 should add the missing ConfigMap key to the evidence: %v", got.Evidence)
+	}
+}
+
+func TestDetectRelated_ExplicitServiceName(t *testing.T) {
+	svc := "checkout"
+	snapshot := &model.DiagnosticSnapshot{
+		Pod:         model.PodInfo{Phase: "Running", Labels: map[string]string{"app": "checkout-v2"}},
+		Containers:  []model.ContainerInfo{{Name: "web", Ready: true, State: model.ContainerState{Phase: "running"}}},
+		ServiceName: &svc,
+		Related: &model.RelatedInfo{Services: []model.ServiceSummary{
+			{Name: "checkout", Selector: map[string]string{"tier": "checkout"}, EndpointsReady: 0},
+		}},
+	}
+	if got := DetectRelated(snapshot, Detect(snapshot)).FailureType; got != "ServiceSelectorMismatch" {
+		t.Errorf("named Service that doesn't select the pod should be a mismatch, got %q", got)
+	}
+}
+
+func TestDetect_AddsLastErrorLogLine(t *testing.T) {
+	prev := "Application starting\nconnecting to db\nFATAL: database configuration is invalid\n"
+	snapshot := &model.DiagnosticSnapshot{
+		Pod: model.PodInfo{Phase: "Running"},
+		Containers: []model.ContainerInfo{{Name: "app", RestartCount: 3,
+			State: model.ContainerState{Phase: "waiting", Reason: "CrashLoopBackOff"}}},
+		Logs: model.LogBundle{Previous: &prev},
+	}
+	got := Detect(snapshot)
+	last := got.Evidence[len(got.Evidence)-1]
+	if last != "Log: FATAL: database configuration is invalid" {
+		t.Errorf("want the fatal line as evidence, got %q", last)
 	}
 }

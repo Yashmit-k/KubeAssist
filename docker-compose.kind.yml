@@ -1,0 +1,21 @@
+# Overlay: let the containerized backend diagnose your local Kind cluster
+# directly (local mode). The backend joins Kind's Docker network and uses
+# Kind's *internal* kubeconfig (API server addressed by container name).
+#
+#   make up-kind      # generates .kube/kind-internal.yaml, then:
+#   docker compose -f docker-compose.yml -f docker-compose.kind.yml up --build
+services:
+  backend:
+    environment:
+      ENABLE_LOCAL_MODE: "true"
+      KUBECONFIG: /kube/config
+      KUBE_CONTEXT: kind-${KIND_CLUSTER:-kubeassist-dev}
+    volumes:
+      - ./.kube/kind-internal.yaml:/kube/config:ro
+    networks:
+      - default
+      - kind
+
+networks:
+  kind:
+    external: true

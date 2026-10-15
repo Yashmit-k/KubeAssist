@@ -5,6 +5,14 @@ from typing import Any
 from app.rag.retrieve import Retrieved
 
 
+# Failure types where the container never started, so missing logs are
+# expected and say nothing about evidence quality.
+NEVER_HAS_LOGS = {
+    "ImagePullBackOff", "FailedScheduling", "VolumeMountFailure", "CreateContainerConfigError",
+    "Healthy", "ServiceSelectorMismatch", "Evicted",
+}
+
+
 def hybrid_confidence(
     snapshot: dict[str, Any],
     retrieved: list[Retrieved],
@@ -22,6 +30,6 @@ def hybrid_confidence(
     no_logs = not logs.get("current") and not logs.get("previous")
     if ftype == "Unknown":
         raw = min(raw, 0.35)
-    elif no_logs and ftype not in {"ImagePullBackOff", "FailedScheduling", "VolumeMountFailure", "Healthy", "ServiceSelectorMismatch"}:
+    elif no_logs and ftype not in NEVER_HAS_LOGS:
         raw = min(raw, 0.55)
     return round(max(0.0, min(1.0, raw)), 3)

@@ -1,14 +1,19 @@
 # syntax=docker/dockerfile:1
-# Same multi-stage pattern as the main Dockerfile, building cmd/agent
-# instead of cmd/server. This image is meant to be deployed INSIDE a
-# customer's cluster, not alongside the main backend.
-FROM golang:1.23-bookworm AS build
+# The agent runs INSIDE customers' clusters, so it gets the same minimal
+# treatment: static binary, distroless, numeric non-root user (works with
+# runAsNonRoot and readOnlyRootFilesystem).
+FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/agent ./cmd/agent
+ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath \
+    -ldflags "-s -w -X main.version=${VERSION}" -o /out/agent ./cmd/agent
 
-FROM gcr.io/distroless/static-debian12
+FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/agent /agent
+USER 65532:65532
 ENTRYPOINT ["/agent"]
