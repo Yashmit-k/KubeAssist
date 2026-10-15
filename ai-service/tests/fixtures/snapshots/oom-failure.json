@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "1.1.0",
+  "cluster": { "name": "kind-kubeassist-dev", "serverVersion": "v1.31.0" },
+  "pod": {
+    "name": "oom-failure-0",
+    "namespace": "kubeassist-lab",
+    "phase": "Running",
+    "nodeName": "kubeassist-dev-control-plane",
+    "labels": { "app": "oom-failure" }
+  },
+  "containers": [
+    {
+      "name": "application",
+      "image": "busybox:1.36",
+      "ready": false,
+      "restartCount": 3,
+      "state": {
+        "phase": "waiting",
+        "reason": "CrashLoopBackOff",
+        "message": "back-off restarting failed container",
+        "exitCode": null
+      },
+      "lastState": {
+        "phase": "terminated",
+        "reason": "OOMKilled",
+        "message": "",
+        "exitCode": 137
+      },
+      "resources": {
+        "limitsMemory": "32Mi",
+        "requests": { "memory": "32Mi" },
+        "limits": { "memory": "32Mi" }
+      },
+      "probes": { "liveness": "", "readiness": "", "startup": "" }
+    }
+  ],
+  "conditions": [{ "type": "Ready", "status": "False" }],
+  "events": [
+    { "type": "Warning", "reason": "OOMKilling", "message": "Memory cgroup out of memory: Killed process", "count": 2, "lastTimestamp": "2026-08-16T10:00:00Z" },
+    { "type": "Warning", "reason": "BackOff", "message": "Back-off restarting failed container", "count": 5, "lastTimestamp": "2026-08-16T10:00:00Z" }
+  ],
+  "logs": {
+    "current": null,
+    "previous": "Allocating memory beyond the container limit\n",
+    "truncated": false,
+    "unavailableReason": null
+  },
+  "detector": {
+    "failureType": "OOMKilled",
+    "confidence": 0.95,
+    "evidence": ["Container \"application\" was OOMKilled (restarts: 3, memory limit: 32Mi)"],
+    "searchTerms": ["OOMKilled", "memory limit", "resource requests"]
+  },
+  "userQuestion": "",
+  "collectedAt": "2026-08-16T10:00:00Z"
+}

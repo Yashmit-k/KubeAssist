@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: application-config
+  namespace: kubeassist-lab
+data:
+  api-url: http://api.example.com
+---
+# Intentionally broken: references a ConfigMap key that does not exist.
+# Expected: CreateContainerConfigError (missing key "database-url").
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: missing-config-app
+  namespace: kubeassist-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: missing-config-app
+  template:
+    metadata:
+      labels:
+        app: missing-config-app
+    spec:
+      containers:
+        - name: application
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "API_URL=${API_URL}"
+              echo "DATABASE_URL=${DATABASE_URL}"
+              sleep 3600
+          env:
+            - name: API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: application-config
+                  key: api-url
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: application-config
+                  key: database-url

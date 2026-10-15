@@ -1,0 +1,112 @@
+[
+  {
+    "title": "Configure a Pod to Use a ConfigMap",
+    "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/",
+    "section": "missing-keys",
+    "k8s_version": "1.31",
+    "doc_type": "task",
+    "failure_tags": [
+      "CreateContainerConfigError"
+    ],
+    "text": "CreateContainerConfigError occurs when the kubelet cannot materialize env or volume config, often because a ConfigMap or Secret key referenced by configMapKeyRef does not exist. The ConfigMap itself may exist with other keys. Do not send Secret values to an AI service; names and key presence are enough.\n\nFix by adding the missing key or correcting the env reference. Init containers can fail the same way before app containers start."
+  },
+  {
+    "title": "Debug Running Pods",
+    "url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/",
+    "section": "logs-and-restarts",
+    "k8s_version": "1.31",
+    "doc_type": "task",
+    "failure_tags": [
+      "CrashLoopBackOff",
+      "Healthy",
+      "InitContainerFailure",
+      "Unknown"
+    ],
+    "text": "When a container repeatedly exits, Kubernetes marks it CrashLoopBackOff and increases the delay between restart attempts. Inspect the current container status (waiting reason, last termination exit code) and read logs from the previous instance with kubectl logs --previous once restartCount is greater than zero.\n\nDo not assume a crash loop is a probe problem unless Unhealthy liveness events are present. Application configuration errors that print FATAL messages and exit non-zero are ordinary CrashLoopBackOff. Init containers that fail block regular containers from starting; debug init status separately.\n\nA Healthy pod has phase Running and all containers Ready. Absence of waiting reasons and restart storms supports a Healthy classification from the collector."
+  },
+  {
+    "title": "Debug Services",
+    "url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/",
+    "section": "selectors",
+    "k8s_version": "1.31",
+    "doc_type": "task",
+    "failure_tags": [
+      "ServiceSelectorMismatch",
+      "ReadinessFailure",
+      "Healthy"
+    ],
+    "text": "A Service selects pods by label selector. If the selector does not match the pod labels, Endpoints stay empty (endpointsReady 0) even when the pod is Healthy and Ready. Align the Service selector with the pod labels.\n\nIf the selector matches but the pod is not Ready, endpoints can also be empty; that is readiness, not a selector mismatch. Confirm selector, labels, and ready endpoint count together."
+  },
+  {
+    "title": "Images",
+    "url": "https://kubernetes.io/docs/concepts/containers/images/",
+    "section": "image-pull",
+    "k8s_version": "1.31",
+    "doc_type": "concept",
+    "failure_tags": [
+      "ImagePullBackOff",
+      "InitContainerFailure"
+    ],
+    "text": "ImagePullBackOff and ErrImagePull mean the kubelet could not fetch the image. Common causes are a wrong registry host or tag, missing imagePullSecrets for a private registry, or rate limits. ErrImagePull is the immediate failure; ImagePullBackOff is the backoff state. Detectors should emit failureType ImagePullBackOff for both.\n\nThe container has not started, so application logs are usually unavailable. Evidence is waiting.reason, the image field, and Failed events. Fix the image reference or credentials, then the pod can start."
+  },
+  {
+    "title": "Init Containers",
+    "url": "https://kubernetes.io/docs/concepts/workloads/pods/init-containers/",
+    "section": "init-failures",
+    "k8s_version": "1.31",
+    "doc_type": "concept",
+    "failure_tags": [
+      "InitContainerFailure",
+      "CrashLoopBackOff",
+      "ImagePullBackOff"
+    ],
+    "text": "Init containers run to completion before app containers. If an init container crash-loops or cannot pull its image, the pod never becomes Ready. Inspect init container waiting or terminated state and restartCount; a snapshot may catch either half of the crash cycle.\n\nUse previous logs for the failing init container. Image pull on init is still an image problem; crash-looping init is process exit."
+  },
+  {
+    "title": "Assign Memory Resources to Containers and Pods",
+    "url": "https://kubernetes.io/docs/tasks/configure-pod-container/assign-memory-resource/",
+    "section": "memory-limits",
+    "k8s_version": "1.31",
+    "doc_type": "task",
+    "failure_tags": [
+      "OOMKilled",
+      "Evicted"
+    ],
+    "text": "If a container exceeds its memory limit, the runtime OOMKills it (often exit 137, lastState reason OOMKilled). The pod may currently show CrashLoopBackOff while waiting; the termination reason is still OOMKilled. Raise the limit or reduce usage.\n\nEviction is different: the kubelet evicts pods under node MemoryPressure or DiskPressure regardless of that container's own limit. Pod status reason Evicted is node-level, not a container memory limit hit."
+  },
+  {
+    "title": "Configure Liveness, Readiness and Startup Probes",
+    "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/",
+    "section": "probes",
+    "k8s_version": "1.31",
+    "doc_type": "task",
+    "failure_tags": [
+      "ProbeFailure",
+      "ReadinessFailure",
+      "CrashLoopBackOff"
+    ],
+    "text": "Liveness probes restart a container when the check fails. If initialDelaySeconds is shorter than the time the app needs to listen, kubelet Unhealthy events for liveness appear and the pod looks like CrashLoopBackOff. Prefer classifying this as ProbeFailure when Unhealthy liveness events exist together with a configured liveness probe and restarts.\n\nReadiness probes never kill the process. A container can be Running with restartCount 0 and still not Ready if readiness fails (dependency not reachable). That is ReadinessFailure, not CrashLoopBackOff. Startup probes can delay liveness until the app has finished starting."
+  },
+  {
+    "title": "Kubernetes Scheduler",
+    "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/",
+    "section": "pending",
+    "k8s_version": "1.31",
+    "doc_type": "concept",
+    "failure_tags": [
+      "FailedScheduling"
+    ],
+    "text": "Pods stay Pending with FailedScheduling events when no node can satisfy requests, taints, or affinity. Absurd CPU or memory requests (for example thousands of cores) never bind. nodeName is empty and container logs are unavailable.\n\nLower resource requests, relax node selectors, or add capacity. Historical FailedScheduling events on a Running pod should not be treated as the current failure."
+  },
+  {
+    "title": "Volumes",
+    "url": "https://kubernetes.io/docs/concepts/storage/volumes/",
+    "section": "mount-failures",
+    "k8s_version": "1.31",
+    "doc_type": "concept",
+    "failure_tags": [
+      "VolumeMountFailure"
+    ],
+    "text": "FailedMount and FailedAttachVolume events mean a volume (PVC, ConfigMap, or Secret volume) could not attach or mount. The pod often remains Pending with no container start. Check PVC binding, storage class, and that volume names exist.\n\nThis is not FailedScheduling even though the pod is Pending; mount events are the primary signal while still Pending."
+  }
+]

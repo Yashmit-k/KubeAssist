@@ -1,0 +1,326 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kubeassist.local/schemas/diagnostic-snapshot.schema.json",
+  "title": "DiagnosticSnapshot",
+  "description": "Redacted cluster evidence produced by the Go collector and consumed by the Python AI service. Detectors run in Go and populate the detector field before this is sent to AI. Field names match backend-go detect/model (flattened container state, initContainers, pod.reason).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "cluster",
+    "pod",
+    "containers",
+    "conditions",
+    "events",
+    "logs",
+    "detector",
+    "collectedAt"
+  ],
+  "$defs": {
+    "containerState": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Flattened kube container state as used by Go detectors (state.phase / reason / message / exitCode).",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "enum": ["waiting", "running", "terminated"]
+        },
+        "reason": { "type": "string" },
+        "message": { "type": "string" },
+        "exitCode": { "type": ["integer", "null"] },
+        "startedAt": { "type": "string" },
+        "finishedAt": { "type": "string" }
+      }
+    },
+    "containerStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "image", "ready", "restartCount"],
+      "properties": {
+        "name": { "type": "string" },
+        "image": { "type": "string" },
+        "ready": { "type": "boolean" },
+        "restartCount": { "type": "integer", "minimum": 0 },
+        "state": { "$ref": "#/$defs/containerState" },
+        "lastState": {
+          "type": ["object", "null"],
+          "description": "Previous termination; same shape as state. Used for OOMKilled while currently waiting CrashLoopBackOff.",
+          "additionalProperties": false,
+          "properties": {
+            "phase": {
+              "type": "string",
+              "enum": ["waiting", "running", "terminated"]
+            },
+            "reason": { "type": "string" },
+            "message": { "type": "string" },
+            "exitCode": { "type": ["integer", "null"] },
+            "startedAt": { "type": "string" },
+            "finishedAt": { "type": "string" }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "limitsMemory": {
+              "type": "string",
+              "description": "Go field Resources.LimitsMemory, e.g. 32Mi"
+            },
+            "requests": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "limits": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Go uses string summaries; empty string means not configured.",
+          "properties": {
+            "liveness": { "type": "string" },
+            "readiness": { "type": "string" },
+            "startup": { "type": "string" }
+          }
+        }
+      }
+    },
+    "failureType": {
+      "type": "string",
+      "description": "ErrImagePull is not a type; Go must send ImagePullBackOff and put ErrImagePull in evidence.",
+      "enum": [
+        "Healthy",
+        "CrashLoopBackOff",
+        "ProbeFailure",
+        "ImagePullBackOff",
+        "OOMKilled",
+        "CreateContainerConfigError",
+        "FailedScheduling",
+        "ServiceSelectorMismatch",
+        "Evicted",
+        "InitContainerFailure",
+        "VolumeMountFailure",
+        "ReadinessFailure",
+        "Unknown"
+      ]
+    }
+  },
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.1.0"
+    },
+    "cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "serverVersion"],
+      "properties": {
+        "name": { "type": "string" },
+        "serverVersion": {
+          "type": "string",
+          "description": "Kubernetes server version, e.g. v1.31.0"
+        }
+      }
+    },
+    "pod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "namespace", "phase"],
+      "properties": {
+        "name": { "type": "string" },
+        "namespace": { "type": "string" },
+        "phase": {
+          "type": "string",
+          "enum": ["Pending", "Running", "Succeeded", "Failed", "Unknown"]
+        },
+        "reason": {
+          "type": "string",
+          "description": "pod.status.reason; Evicted when kubelet evicted the pod for node pressure"
+        },
+        "message": {
+          "type": "string",
+          "description": "pod.status.message accompanying reason"
+        },
+        "nodeName": { "type": ["string", "null"] },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Scrubbed; sensitive annotations removed"
+        },
+        "ownerRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "name"],
+            "properties": {
+              "kind": { "type": "string" },
+              "name": { "type": "string" },
+              "apiVersion": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "initContainers": {
+      "type": "array",
+      "description": "Init container statuses; Go detectInitContainerFailure reads this. Empty or omitted if none.",
+      "items": { "$ref": "#/$defs/containerStatus" }
+    },
+    "containers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/containerStatus" }
+    },
+    "conditions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "status"],
+        "properties": {
+          "type": { "type": "string" },
+          "status": { "type": "string" },
+          "reason": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "reason", "message"],
+        "properties": {
+          "type": { "type": "string" },
+          "reason": { "type": "string" },
+          "message": { "type": "string" },
+          "count": { "type": "integer" },
+          "lastTimestamp": { "type": "string" }
+        }
+      }
+    },
+    "logs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "previous", "truncated", "unavailableReason"],
+      "properties": {
+        "current": { "type": ["string", "null"] },
+        "previous": {
+          "type": ["string", "null"],
+          "description": "Only populated when restartCount > 0"
+        },
+        "truncated": { "type": "boolean" },
+        "unavailableReason": {
+          "type": ["string", "null"],
+          "description": "e.g. Pending pod has no logs yet"
+        }
+      }
+    },
+    "owners": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicaSet": { "type": ["object", "null"] },
+        "deployment": { "type": ["object", "null"] },
+        "yamlExcerpts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Sanitized YAML snippets only"
+        }
+      }
+    },
+    "related": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Pass-2 expansions; omit or empty when not needed",
+      "properties": {
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "selector": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "endpointsReady": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Go field Services[].EndpointsReady (ready endpoint count)"
+              }
+            }
+          }
+        },
+        "configMapRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "keysPresent": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "keysMissing": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "detector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failureType", "confidence", "evidence", "searchTerms"],
+      "properties": {
+        "failureType": { "$ref": "#/$defs/failureType" },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Detector prior only; Python computes DiagnosisResponse.confidenceScore"
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "searchTerms": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Used by FAISS retriever; set by Go detectors"
+        },
+        "relatedHints": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "userQuestion": {
+      "type": "string",
+      "default": ""
+    },
+    "serviceName": {
+      "type": ["string", "null"],
+      "description": "Optional Service to evaluate for selector/endpoint issues"
+    },
+    "collectedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oom-failure
+  namespace: kubeassist-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oom-failure
+  template:
+    metadata:
+      labels:
+        app: oom-failure
+    spec:
+      containers:
+        - name: application
+          image: python:3.13-alpine
+          command:
+            - python
+            - -c
+            - |
+              import time
+              print("Allocating memory beyond the container limit", flush=True)
+              blocks = []
+              while True:
+                  blocks.append(bytearray(10 * 1024 * 1024))
+                  print(f"Allocated approximately {len(blocks) * 10} MiB", flush=True)
+                  time.sleep(0.25)
+          resources:
+            requests:
+              memory: 16Mi
+              cpu: 10m
+            limits:
+              memory: 32Mi
+              cpu: 100m

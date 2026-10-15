@@ -1,0 +1,40 @@
+{
+  "id": "missing-config-app",
+  "labManifest": "k8s/lab/missing-config-app.yaml",
+  "namespace": "kubeassist-lab",
+  "workload": {
+    "kind": "Deployment",
+    "name": "missing-config-app",
+    "labelSelector": "app=missing-config-app"
+  },
+  "expectedFailureType": "CreateContainerConfigError",
+  "expectedPhase": "Pending",
+  "expectedSignals": {
+    "waitingReason": "CreateContainerConfigError",
+    "restartCountMin": 0,
+    "eventReasons": ["Failed"],
+    "logContains": [],
+    "configMap": {
+      "name": "application-config",
+      "keysPresent": ["api-url"],
+      "keysMissing": ["database-url"]
+    },
+    "notes": "ConfigMap exists but key database-url is missing. Do not fetch Secret values."
+  },
+  "searchTerms": [
+    "CreateContainerConfigError",
+    "configmap",
+    "configure pod configmap",
+    "environment variables configmap"
+  ],
+  "probableRootCause": "Pod env references configMapKeyRef key database-url which is absent from ConfigMap application-config.",
+  "typicalFix": "Add database-url to the ConfigMap or remove/fix the env reference.",
+  "verificationCommands": [
+    "kubectl get pods -n kubeassist-lab -l app=missing-config-app",
+    "kubectl describe pod -l app=missing-config-app -n kubeassist-lab",
+    "kubectl get configmap application-config -n kubeassist-lab -o yaml"
+  ],
+  "waitHintSeconds": 30,
+  "snapshotFixtureStatus": "expected_notes_only",
+  "notes": "Lab file was completed to include the broken Deployment (was ConfigMap-only)."
+}

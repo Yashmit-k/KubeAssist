@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "1.1.0",
+  "cluster": { "name": "kind-kubeassist-dev", "serverVersion": "v1.31.0" },
+  "pod": {
+    "name": "crashloop-app-0",
+    "namespace": "kubeassist-lab",
+    "phase": "Running",
+    "reason": "",
+    "message": "",
+    "nodeName": "kubeassist-dev-control-plane",
+    "labels": { "app": "crashloop-app" },
+    "annotations": {},
+    "ownerRefs": [{ "kind": "ReplicaSet", "name": "crashloop-app", "apiVersion": "apps/v1" }]
+  },
+  "initContainers": [],
+  "containers": [
+    {
+      "name": "application",
+      "image": "busybox:1.36",
+      "ready": false,
+      "restartCount": 4,
+      "state": {
+        "phase": "waiting",
+        "reason": "CrashLoopBackOff",
+        "message": "back-off 1m0s restarting failed container=application",
+        "exitCode": null
+      },
+      "lastState": {
+        "phase": "terminated",
+        "reason": "Error",
+        "message": "",
+        "exitCode": 1
+      },
+      "resources": { "limitsMemory": "", "requests": {}, "limits": {} },
+      "probes": { "liveness": "", "readiness": "", "startup": "" }
+    }
+  ],
+  "conditions": [
+    { "type": "Ready", "status": "False", "reason": "ContainersNotReady", "message": "containers with unready status: [application]" }
+  ],
+  "events": [
+    { "type": "Warning", "reason": "BackOff", "message": "Back-off restarting failed container application", "count": 8, "lastTimestamp": "2026-08-16T10:00:00Z" },
+    { "type": "Normal", "reason": "Created", "message": "Created container application", "count": 4, "lastTimestamp": "2026-08-16T10:00:00Z" },
+    { "type": "Normal", "reason": "Started", "message": "Started container application", "count": 4, "lastTimestamp": "2026-08-16T10:00:00Z" }
+  ],
+  "logs": {
+    "current": "FATAL: database configuration is invalid\n",
+    "previous": "FATAL: database configuration is invalid\n",
+    "truncated": false,
+    "unavailableReason": null
+  },
+  "detector": {
+    "failureType": "CrashLoopBackOff",
+    "confidence": 0.9,
+    "evidence": [
+      "Container \"application\" waiting: CrashLoopBackOff (restarts: 4)",
+      "Last termination: exit code 1, reason Error"
+    ],
+    "searchTerms": ["CrashLoopBackOff", "container exit code", "application logs"]
+  },
+  "userQuestion": "Why is crashloop-app restarting?",
+  "serviceName": null,
+  "collectedAt": "2026-08-16T10:00:00Z"
+}

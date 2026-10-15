@@ -1,0 +1,37 @@
+{
+  "id": "crashloop-app",
+  "labManifest": "k8s/lab/crashloop-app.yaml",
+  "namespace": "kubeassist-lab",
+  "workload": {
+    "kind": "Deployment",
+    "name": "crashloop-app",
+    "labelSelector": "app=crashloop-app"
+  },
+  "expectedFailureType": "CrashLoopBackOff",
+  "expectedPhase": "Running",
+  "expectedSignals": {
+    "waitingReason": "CrashLoopBackOff",
+    "restartCountMin": 1,
+    "eventReasons": ["BackOff", "Created", "Started"],
+    "logContains": ["FATAL: database configuration is invalid"],
+    "exitCode": 1,
+    "notes": "App process exits; not probe-driven. Prefer CrashLoopBackOff over ProbeFailure."
+  },
+  "searchTerms": [
+    "CrashLoopBackOff",
+    "pod lifecycle",
+    "container restart",
+    "debug crashing pod"
+  ],
+  "probableRootCause": "Container command exits non-zero due to invalid application configuration message in logs.",
+  "typicalFix": "Fix application config/command so the process stays running (lab: remove exit 1).",
+  "verificationCommands": [
+    "kubectl get pods -n kubeassist-lab -l app=crashloop-app",
+    "kubectl describe pod -l app=crashloop-app -n kubeassist-lab",
+    "kubectl logs -l app=crashloop-app -n kubeassist-lab --tail=50",
+    "kubectl logs -l app=crashloop-app -n kubeassist-lab --previous --tail=50"
+  ],
+  "waitHintSeconds": 45,
+  "snapshotFixtureStatus": "expected_notes_only",
+  "notes": "Previous logs important once restartCount > 0."
+}

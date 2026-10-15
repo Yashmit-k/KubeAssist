@@ -1,0 +1,30 @@
+{
+  "id": "healthy-app",
+  "labManifest": "k8s/lab/healthy-app.yaml",
+  "namespace": "kubeassist-lab",
+  "workload": {
+    "kind": "Deployment",
+    "name": "healthy-app",
+    "labelSelector": "app=healthy-app"
+  },
+  "expectedFailureType": "Healthy",
+  "expectedPhase": "Running",
+  "expectedSignals": {
+    "waitingReason": null,
+    "restartCountMin": 0,
+    "eventReasons": [],
+    "logContains": [],
+    "notes": "Pod Ready; Service healthy-app has endpoints."
+  },
+  "searchTerms": ["pod lifecycle", "deployments", "kubernetes services"],
+  "probableRootCause": "No failure; workload is healthy.",
+  "typicalFix": null,
+  "verificationCommands": [
+    "kubectl get pods -n kubeassist-lab -l app=healthy-app",
+    "kubectl get endpoints healthy-app -n kubeassist-lab"
+  ],
+  "relatedService": "healthy-app",
+  "waitHintSeconds": 30,
+  "snapshotFixtureStatus": "expected_notes_only",
+  "notes": "Control sample for false-positive detector checks."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "image-pull-failure",
+  "labManifest": "k8s/lab/image-pull-failure.yaml",
+  "namespace": "kubeassist-lab",
+  "workload": {
+    "kind": "Deployment",
+    "name": "image-pull-failure",
+    "labelSelector": "app=image-pull-failure"
+  },
+  "expectedFailureType": "ImagePullBackOff",
+  "expectedPhase": "Pending",
+  "expectedSignals": {
+    "waitingReason": "ImagePullBackOff",
+    "alternateWaitingReasons": ["ErrImagePull"],
+    "restartCountMin": 0,
+    "eventReasons": ["Failed", "BackOff"],
+    "logContains": [],
+    "image": "registry.invalid.example/kubeassist/nonexistent:v999",
+    "notes": "Logs usually unavailable. Evidence is waiting.reason + Failed events."
+  },
+  "searchTerms": [
+    "ImagePullBackOff",
+    "ErrImagePull",
+    "images",
+    "private registry",
+    "image pull secrets"
+  ],
+  "probableRootCause": "Image cannot be pulled from an invalid/nonexistent registry path.",
+  "typicalFix": "Correct image name/registry or configure pull credentials.",
+  "verificationCommands": [
+    "kubectl get pods -n kubeassist-lab -l app=image-pull-failure",
+    "kubectl describe pod -l app=image-pull-failure -n kubeassist-lab"
+  ],
+  "waitHintSeconds": 60,
+  "snapshotFixtureStatus": "expected_notes_only",
+  "notes": "Mark logs.unavailableReason when container never started."
+}

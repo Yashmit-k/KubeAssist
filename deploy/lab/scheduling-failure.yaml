@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduling-failure
+  namespace: kubeassist-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduling-failure
+  template:
+    metadata:
+      labels:
+        app: scheduling-failure
+    spec:
+      containers:
+        - name: application
+          image: nginx:1.27-alpine
+          resources:
+            requests:
+              cpu: "1000"
+              memory: "1Ti"
+            limits:
+              cpu: "1000"
+              memory: "1Ti"

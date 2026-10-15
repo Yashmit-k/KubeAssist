@@ -1,0 +1,40 @@
+{
+  "id": "scheduling-failure",
+  "labManifest": "k8s/lab/scheduling-failure.yaml",
+  "namespace": "kubeassist-lab",
+  "workload": {
+    "kind": "Deployment",
+    "name": "scheduling-failure",
+    "labelSelector": "app=scheduling-failure"
+  },
+  "expectedFailureType": "FailedScheduling",
+  "expectedPhase": "Pending",
+  "expectedSignals": {
+    "waitingReason": null,
+    "restartCountMin": 0,
+    "eventReasons": ["FailedScheduling"],
+    "logContains": [],
+    "resourceRequests": {
+      "cpu": "1000",
+      "memory": "1Ti"
+    },
+    "notes": "Pod never scheduled; nodeName null; logs unavailable. Evidence is FailedScheduling events + absurd requests."
+  },
+  "searchTerms": [
+    "FailedScheduling",
+    "scheduler",
+    "resource requests",
+    "assign cpu memory resources",
+    "pod pending"
+  ],
+  "probableRootCause": "CPU/memory requests far exceed cluster capacity (cpu 1000 cores, memory 1Ti).",
+  "typicalFix": "Lower requests/limits to realistic values.",
+  "verificationCommands": [
+    "kubectl get pods -n kubeassist-lab -l app=scheduling-failure",
+    "kubectl describe pod -l app=scheduling-failure -n kubeassist-lab",
+    "kubectl get events -n kubeassist-lab --field-selector reason=FailedScheduling"
+  ],
+  "waitHintSeconds": 30,
+  "snapshotFixtureStatus": "expected_notes_only",
+  "notes": "Pending-phase handling: no container logs expected."
+}

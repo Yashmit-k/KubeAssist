@@ -1,0 +1,42 @@
+{
+  "id": "probe-failure-app",
+  "labManifest": "k8s/lab/probe-failure-app.yaml",
+  "namespace": "kubeassist-lab",
+  "workload": {
+    "kind": "Deployment",
+    "name": "probe-failure-app",
+    "labelSelector": "app=probe-failure-app"
+  },
+  "expectedFailureType": "ProbeFailure",
+  "expectedPhase": "Running",
+  "expectedSignals": {
+    "waitingReason": "CrashLoopBackOff",
+    "restartCountMin": 1,
+    "eventReasons": ["Unhealthy", "Killing", "BackOff"],
+    "logContains": ["Application requires 30 seconds to start"],
+    "probe": {
+      "liveness": {
+        "initialDelaySeconds": 2,
+        "periodSeconds": 3,
+        "failureThreshold": 2
+      },
+      "startup": null
+    },
+    "notes": "Classify as ProbeFailure when Unhealthy/Killing events exist with aggressive liveness and slow start. Do not treat as plain app CrashLoop."
+  },
+  "searchTerms": [
+    "liveness probe",
+    "startup probe",
+    "configure liveness readiness startup probes",
+    "CrashLoopBackOff probe"
+  ],
+  "probableRootCause": "Liveness probe kills the container before the app finishes starting (30s sleep vs short initialDelay).",
+  "typicalFix": "Add startupProbe and/or increase liveness initialDelaySeconds.",
+  "verificationCommands": [
+    "kubectl describe pod -l app=probe-failure-app -n kubeassist-lab",
+    "kubectl get events -n kubeassist-lab --field-selector reason=Unhealthy"
+  ],
+  "waitHintSeconds": 60,
+  "snapshotFixtureStatus": "expected_notes_only",
+  "notes": "Detector priority: ProbeFailure > CrashLoopBackOff when probe evidence present."
+}

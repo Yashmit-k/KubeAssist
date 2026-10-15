@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: probe-failure-app
+  namespace: kubeassist-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: probe-failure-app
+  template:
+    metadata:
+      labels:
+        app: probe-failure-app
+    spec:
+      containers:
+        - name: application
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Application requires 30 seconds to start"
+              sleep 30
+              httpd -f -p 8080
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            timeoutSeconds: 1
+            failureThreshold: 2

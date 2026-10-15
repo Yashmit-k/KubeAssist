@@ -1,0 +1,5 @@
+{
+  "dim": 384,
+  "count": 9,
+  "backend": "hashed-ip"
+}

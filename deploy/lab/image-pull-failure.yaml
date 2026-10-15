@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-pull-failure
+  namespace: kubeassist-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: image-pull-failure
+  template:
+    metadata:
+      labels:
+        app: image-pull-failure
+    spec:
+      containers:
+        - name: application
+          image: registry.invalid.example/kubeassist/nonexistent:v999

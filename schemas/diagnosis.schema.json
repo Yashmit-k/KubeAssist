@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kubeassist.local/schemas/diagnosis.schema.json",
+  "title": "DiagnosisResponse",
+  "description": "Structured SRE-style diagnosis returned by the Python AI service. Must be evidence-grounded; citations must come from retrieved docs only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "failureType",
+    "issueSummary",
+    "observedEvidence",
+    "probableRootCause",
+    "reasoning",
+    "confidenceScore",
+    "resolutionSteps",
+    "verificationCommands",
+    "rollbackGuidance",
+    "documentationReferences",
+    "uncertaintyNotes"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.1.0"
+    },
+    "failureType": {
+      "type": "string",
+      "description": "Must echo detector.failureType from the snapshot (do not reclassify). ErrImagePull is not a type; echo ImagePullBackOff.",
+      "enum": [
+        "Healthy",
+        "CrashLoopBackOff",
+        "ProbeFailure",
+        "ImagePullBackOff",
+        "OOMKilled",
+        "CreateContainerConfigError",
+        "FailedScheduling",
+        "ServiceSelectorMismatch",
+        "Evicted",
+        "InitContainerFailure",
+        "VolumeMountFailure",
+        "ReadinessFailure",
+        "Unknown"
+      ]
+    },
+    "issueSummary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "observedEvidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "Bullets that paraphrase or quote snapshot fields only"
+    },
+    "probableRootCause": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reasoning": {
+      "type": "string",
+      "minLength": 1
+    },
+    "confidenceScore": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Hybrid: detector + retrieval + optional LLM self-score"
+    },
+    "resolutionSteps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["order", "description"],
+        "properties": {
+          "order": { "type": "integer", "minimum": 1 },
+          "description": { "type": "string" },
+          "command": {
+            "type": ["string", "null"],
+            "description": "Suggested kubectl; never auto-executed"
+          },
+          "isWriteAction": {
+            "type": "boolean",
+            "description": "true if command mutates cluster state (manual only)"
+          }
+        }
+      }
+    },
+    "verificationCommands": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Prefer read-only kubectl"
+    },
+    "rollbackGuidance": {
+      "type": "string"
+    },
+    "documentationReferences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "url"],
+        "properties": {
+          "title": { "type": "string" },
+          "url": { "type": "string", "format": "uri" },
+          "section": { "type": "string" },
+          "snippet": { "type": "string" }
+        }
+      },
+      "description": "Only URLs that appeared in retrieval results"
+    },
+    "uncertaintyNotes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Explicit gaps, e.g. previous logs unavailable"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["full_rag", "detector_only_stub", "mock_llm"],
+      "description": "full_rag in production path; stubs when LLM unavailable"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "oom-failure",
+  "labManifest": "k8s/lab/oom-failure.yaml",
+  "namespace": "kubeassist-lab",
+  "workload": {
+    "kind": "Deployment",
+    "name": "oom-failure",
+    "labelSelector": "app=oom-failure"
+  },
+  "expectedFailureType": "OOMKilled",
+  "expectedPhase": "Running",
+  "expectedSignals": {
+    "waitingReason": "CrashLoopBackOff",
+    "terminationReason": "OOMKilled",
+    "restartCountMin": 1,
+    "eventReasons": ["OOMKilling", "BackOff", "Started"],
+    "logContains": ["Allocating memory beyond the container limit"],
+    "memoryLimit": "32Mi",
+    "notes": "Look at lastState.terminated.reason == OOMKilled, not only waiting CrashLoopBackOff."
+  },
+  "searchTerms": [
+    "OOMKilled",
+    "resource limits",
+    "memory limit",
+    "assign memory resources containers"
+  ],
+  "probableRootCause": "Container exceeds memory limit (32Mi) and is OOMKilled.",
+  "typicalFix": "Raise memory limit or reduce application memory use.",
+  "verificationCommands": [
+    "kubectl describe pod -l app=oom-failure -n kubeassist-lab",
+    "kubectl logs -l app=oom-failure -n kubeassist-lab --previous --tail=50"
+  ],
+  "waitHintSeconds": 90,
+  "snapshotFixtureStatus": "expected_notes_only",
+  "notes": "May take time to allocate enough memory; waitHintSeconds elevated."
+}

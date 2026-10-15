@@ -1,0 +1,42 @@
+{
+  "id": "service-selector-failure",
+  "labManifest": "k8s/lab/service-selector-failure.yaml",
+  "namespace": "kubeassist-lab",
+  "workload": {
+    "kind": "Deployment",
+    "name": "service-demo",
+    "labelSelector": "app=service-demo"
+  },
+  "expectedFailureType": "ServiceSelectorMismatch",
+  "expectedPhase": "Running",
+  "expectedSignals": {
+    "waitingReason": null,
+    "restartCountMin": 0,
+    "eventReasons": [],
+    "logContains": [],
+    "podLabels": { "app": "service-demo" },
+    "service": {
+      "name": "broken-service",
+      "selector": { "app": "wrong-label" },
+      "expectedEndpointCount": 0
+    },
+    "notes": "Pod is healthy. Failure is Service selector mismatch. Requires pass-2 Service/Endpoints collection. Pass serviceName=broken-service when troubleshooting."
+  },
+  "searchTerms": [
+    "service selector",
+    "endpoints",
+    "service discovery",
+    "debug service not connecting"
+  ],
+  "probableRootCause": "Service broken-service selects app=wrong-label but pods are labeled app=service-demo, so endpoints stay empty.",
+  "typicalFix": "Change Service selector to app=service-demo (or relabel pods).",
+  "verificationCommands": [
+    "kubectl get pods -n kubeassist-lab -l app=service-demo",
+    "kubectl get svc broken-service -n kubeassist-lab -o yaml",
+    "kubectl get endpoints broken-service -n kubeassist-lab"
+  ],
+  "relatedService": "broken-service",
+  "waitHintSeconds": 30,
+  "snapshotFixtureStatus": "expected_notes_only",
+  "notes": "Diagnosing only the pod without related Services will look Healthy — UI/API must support serviceName or related expansion."
+}

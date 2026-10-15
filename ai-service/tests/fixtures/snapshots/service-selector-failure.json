@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "1.1.0",
+  "cluster": { "name": "kind-kubeassist-dev", "serverVersion": "v1.31.0" },
+  "pod": {
+    "name": "service-demo-0",
+    "namespace": "kubeassist-lab",
+    "phase": "Running",
+    "nodeName": "kubeassist-dev-control-plane",
+    "labels": { "app": "service-demo" }
+  },
+  "containers": [
+    {
+      "name": "application",
+      "image": "nginx:1.27-alpine",
+      "ready": true,
+      "restartCount": 0,
+      "state": { "phase": "running", "reason": "", "message": "" },
+      "lastState": null,
+      "probes": { "liveness": "", "readiness": "", "startup": "" }
+    }
+  ],
+  "conditions": [{ "type": "Ready", "status": "True" }],
+  "events": [],
+  "logs": {
+    "current": "ready\n",
+    "previous": null,
+    "truncated": false,
+    "unavailableReason": null
+  },
+  "related": {
+    "services": [
+      {
+        "name": "broken-service",
+        "selector": { "app": "wrong-label" },
+        "endpointsReady": 0
+      }
+    ]
+  },
+  "detector": {
+    "failureType": "ServiceSelectorMismatch",
+    "confidence": 0.85,
+    "evidence": [
+      "Service \"broken-service\" has 0 ready endpoints",
+      "Service selector does not match pod labels"
+    ],
+    "searchTerms": ["service selector mismatch", "endpoints", "service discovery"]
+  },
+  "serviceName": "broken-service",
+  "collectedAt": "2026-08-16T10:00:00Z"
+}
