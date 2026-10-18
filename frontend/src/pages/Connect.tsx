@@ -6,7 +6,7 @@ import { useHealth } from "../components/Layout";
 import SignIn, { authErrorMessage } from "../components/SignIn";
 import { Badge, Button, buttonClass, Card, Command, CopyButton, Dot, Empty, ErrorBox, PageHeader, Spinner } from "../components/ui";
 import { api } from "../lib/api";
-import { installCommand } from "../lib/commands";
+import { applyFromDownloads, detectShell, installCommand, type Shell } from "../lib/commands";
 import { useMe, useMyClusters } from "../lib/clusters";
 import { age } from "../lib/format";
 import type { ClusterStatus, RegisteredCluster } from "../lib/types";
@@ -40,6 +40,11 @@ function Hint({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+const SHELL_LABEL: Record<Shell, string> = {
+  powershell: "Windows (PowerShell)",
+  posix: "macOS / Linux (bash, zsh)",
+};
+
 /** How long to wait for the agent before showing troubleshooting help. */
 const SLOW_CONNECT_MS = 60_000;
 
@@ -58,7 +63,7 @@ function Registered({ reg }: { reg: RegisteredCluster }) {
   }, []);
   const file = `kubeassist-agent-${reg.clusterId}.yaml`;
   const install = installCommand(reg.manifest);
-  const lines = reg.manifest.trimEnd().split("\n").length;
+  const shells: Shell[] = detectShell() === "powershell" ? ["powershell", "posix"] : ["posix", "powershell"];
 
   return (
     <Card title={`Install the agent in “${reg.clusterId}”`}>
@@ -92,35 +97,30 @@ function Registered({ reg }: { reg: RegisteredCluster }) {
           </Hint>
         </Step>
 
-        <Step n={2} title="Install the agent — paste this one command">
+        <Step n={2} title="Download the agent manifest and apply it">
           <p className="mb-2 text-sm text-muted">
-            Copy it and paste it into the same terminal (macOS, Linux or WSL). It applies the manifest directly — no file to save. Read-only RBAC (no Secrets,
-            no writes); the agent connects outbound to <code className="font-mono text-xs">{reg.relayUrl}</code>, so nothing in your cluster is exposed.
+            Read-only RBAC (no Secrets, no writes); the agent connects outbound to <code className="font-mono text-xs">{reg.relayUrl}</code>, so nothing in
+            your cluster is exposed. The file contains the agent's token and is offered only now — download it before leaving this page.
           </p>
-          <div className="rounded-lg bg-code-bg px-3 py-2.5 font-mono text-[12.5px] text-code-fg ring-1 ring-warn/60">
-            <div className="flex items-start gap-2">
-              <span className="select-none text-faint">$</span>
-              <div className="min-w-0 flex-1">
-                <div>{install.split("\n")[0]}</div>
-                <div className="text-faint">… agent manifest ({lines} lines) …</div>
-                <div>{install.trimEnd().split("\n").at(-1)}</div>
+          <Button variant="primary" onClick={() => download(file, reg.manifest)}>
+            <Download className="size-4" /> Download {file}
+          </Button>
+          <p className="mt-3 mb-1.5 text-sm text-muted">Then, in the terminal from step 1, apply it:</p>
+          <div className="space-y-2">
+            {shells.map((sh) => (
+              <div key={sh}>
+                <div className="mb-1 text-xs font-medium text-muted">{SHELL_LABEL[sh]}</div>
+                <Command cmd={applyFromDownloads(file, sh)} write />
               </div>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <CopyButton text={install} label="Copy install command" className="bg-white/10 px-2.5 py-1.5 text-code-fg hover:bg-white/20 hover:text-code-fg" />
-            </div>
+            ))}
           </div>
           <p className="mt-2 text-xs text-muted">
-            The command contains the agent's token and is shown only now — install it (or download the file) before leaving this page.
+            Saved it somewhere else, or your browser renamed it (e.g. <code className="font-mono">{file.replace(/\.yaml$/, " (1).yaml")}</code>)? Use that path
+            instead.
           </p>
-          <Hint title="Windows PowerShell, or prefer a file?">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={() => download(file, reg.manifest)}>
-                <Download className="size-4" /> Download {file}
-              </Button>
-              <span>then run it from the folder you saved it in:</span>
-            </div>
-            <Command cmd={`kubectl apply -f ${file}`} write />
+          <Hint title="No file? One command to paste instead (macOS, Linux and WSL only — not PowerShell)">
+            <p>This applies the manifest straight from the clipboard using a bash/zsh heredoc. PowerShell can't run it; use the download above on Windows.</p>
+            <CopyButton text={install} label="Copy install command" className="border border-line px-2.5" />
             <pre className="max-h-60 overflow-auto rounded-lg bg-code-bg p-3 font-mono text-[11px] text-code-fg">{reg.manifest}</pre>
           </Hint>
         </Step>
@@ -147,7 +147,7 @@ function Registered({ reg }: { reg: RegisteredCluster }) {
                   <Command cmd="kubectl -n kubeassist logs deployment/kubeassist-agent --tail=20" />
                   <p className="text-xs text-muted">
                     <b>ImagePullBackOff</b>: the cluster can't download the agent image. <b>401 / unauthorized</b> in the logs: the cluster was registered
-                    again, which issues a new token — paste the newest install command. <b>No pod at all</b>: the install command didn't run; check step 1.
+                    again, which issues a new token — download and apply the newest manifest. <b>No pod at all</b>: the apply didn't run (check its output and step 1).
                   </p>
                 </div>
               )}
