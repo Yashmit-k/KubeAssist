@@ -37,3 +37,18 @@ export function installCommand(manifest: string): string {
   const body = manifest.endsWith("\n") ? manifest : manifest + "\n";
   return `kubectl apply -f - <<'${delim}'\n${body}${delim}\n`;
 }
+
+export type Shell = "powershell" | "posix";
+
+/** Best guess at the visitor's shell: PowerShell on Windows, otherwise
+ * bash/zsh. Only picks which instructions are shown first. */
+export function detectShell(nav: Pick<Navigator, "userAgent"> & { userAgentData?: { platform?: string } } = navigator): Shell {
+  const platform = nav.userAgentData?.platform ?? nav.userAgent;
+  return /win/i.test(platform) && !/darwin|mac/i.test(platform) ? "powershell" : "posix";
+}
+
+/** `kubectl apply` for a manifest saved to the browser's default
+ * Downloads folder, written for the given shell. */
+export function applyFromDownloads(file: string, shell: Shell): string {
+  return shell === "powershell" ? `kubectl apply -f "$HOME\\Downloads\\${file}"` : `kubectl apply -f ~/Downloads/${file}`;
+}
