@@ -248,3 +248,27 @@ func TestStubDiagnosis_UsesConcreteFix(t *testing.T) {
 		t.Errorf("fix should be the last, write-flagged step: %+v", last)
 	}
 }
+
+// Re-registering a cluster issues a new token; re-applying the manifest
+// must change the pod template so the running agent restarts with it.
+func TestAgentManifest_NewTokenChangesPodTemplate(t *testing.T) {
+	a := agentManifest("prod", "token-one", "wss://relay/agent/connect", "img")
+	b := agentManifest("prod", "token-two", "wss://relay/agent/connect", "img")
+	annotation := func(m string) string {
+		for _, line := range strings.Split(m, "\n") {
+			if strings.Contains(line, "kubeassist.io/token-hash:") {
+				return line
+			}
+		}
+		return ""
+	}
+	if annotation(a) == "" || annotation(a) == annotation(b) {
+		t.Fatalf("token-hash annotation missing or unchanged: %q vs %q", annotation(a), annotation(b))
+	}
+	if strings.Contains(annotation(a), "token-one") {
+		t.Error("annotation must hold a hash, not the token")
+	}
+	if agentManifest("prod", "token-one", "wss://relay/agent/connect", "img") != a {
+		t.Error("manifest must be deterministic for the same token (no needless restarts)")
+	}
+}

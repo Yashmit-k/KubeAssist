@@ -117,10 +117,17 @@ func (s *Server) handleRevokeCluster(w http.ResponseWriter, r *http.Request, _ c
 // agentManifest renders a complete, read-only agent install manifest
 // for one cluster: namespace, ServiceAccount, ClusterRole (get/list/watch
 // only, no Secrets), binding, token Secret and Deployment.
+//
+// The pod template carries a short hash of the token. The agent reads
+// the token from the Secret only at startup, so without this, applying
+// a manifest with a NEW token (after re-registering) would update the
+// Secret but leave the running pod on the old token, rejected by the
+// relay. A changed annotation makes Kubernetes roll the pod.
 func agentManifest(clusterID, token, relayURL, image string) string {
 	if image == "" {
 		image = "ghcr.io/yashmit-k/kubeassist-agent:latest"
 	}
+	tokenHash := tunnel.HashToken(token)[:16]
 	return fmt.Sprintf(`# KubeAssist agent for cluster %[1]q
 # Read-only: the agent can get/list/watch pods, events, logs, services,
 # endpointslices, configmaps and workloads. It cannot read Secrets and
@@ -188,6 +195,8 @@ spec:
     metadata:
       labels:
         app: kubeassist-agent
+      annotations:
+        kubeassist.io/token-hash: %[5]q
     spec:
       serviceAccountName: kubeassist-agent
       securityContext:
@@ -218,5 +227,5 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-`, clusterID, token, relayURL, image)
+`, clusterID, token, relayURL, image, tokenHash)
 }
