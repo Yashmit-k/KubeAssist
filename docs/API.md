@@ -204,6 +204,42 @@ planner picks one tool and the answer is composed from its result. Pod names may
 be partial; ambiguous names come back as candidates. Needs the AI service (`503
 ai_unavailable` otherwise). Nothing is ever executed on the cluster.
 
+## Fix pull requests (remote clusters, owner only)
+
+Enabled when GitHub sign-in is configured **and** `GITHUB_TOKEN_KEY` is set
+(`features` then includes `fix-prs`).
+
+**Repository access** is a separate authorization from sign-in:
+`GET /api/auth/github/repo-access/start?private=0|1&next=/…` asks GitHub for
+`public_repo` (or `repo` with `private=1`); the callback
+(`/api/auth/github/callback/repo`, a sub-path of the sign-in callback, so the same
+OAuth App works) refuses a GitHub account other than the signed-in one, then
+stores the token AES-256-GCM-encrypted with `GITHUB_TOKEN_KEY`, bound to the user.
+`GET /api/auth/github/repo-access` → `{"available","connected","githubAccount","scopes","private"}`;
+`DELETE` disconnects and revokes the token on GitHub. Dev-login users can't connect.
+
+**Link a cluster** to the folder holding its manifests:
+`PUT /api/remote/{clusterId}/repo` `{"repo":"owner/name","branch":"main","path":"deploy/k8s"}`
+(branch defaults to the repo's default; path `""` = whole repo). The repository must
+exist, be visible to the token and grant you push access. `GET`/`DELETE` the same path.
+
+**Options** — `GET /api/remote/{clusterId}/pods/{ns}/{name}/fix-pr` re-diagnoses the pod
+on the server and lists the fixes that are exact manifest edits:
+`raise-memory` (OOMKilled), `set-image` (ImagePullBackOff), `set-requests`
+(FailedScheduling), `fix-probe` (port / path / timings), `revert-rollout` (undo the last
+revision's image/env/resources in the manifest), `add-config-key` (missing ConfigMap
+key). Each has `inputs` for values only the user knows; options that can't be done
+automatically carry `unavailable` with the reason.
+
+**Open** — `POST` the same path with `{"optionId":"raise-memory","inputs":{"memory":"128Mi"}}`
+→ `201 {"url","number","branch","file","changes"}`. The server finds exactly one YAML
+document of that kind/name/namespace under the linked folder (≤150 YAML files),
+edits only that document — existing values are replaced in place keeping quoting and
+comments, so the diff is just those lines — pushes a new `kubeassist/…` branch and
+opens a PR against the linked branch. It never writes to the base branch. Errors:
+`409 repo_not_linked | connect_github | fix_not_available | ambiguous_manifest`,
+`404 manifest_not_found`, `422 edit_failed` (e.g. an invalid value).
+
 ## Alerts (remote clusters, owner only)
 
 KubeAssist scans every cluster that has alerts enabled every `ALERT_INTERVAL`

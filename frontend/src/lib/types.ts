@@ -156,6 +156,25 @@ export type Rollout = {
   changes: TemplateChange[];
 };
 
+export type RepoAccess = { available: boolean; connected: boolean; githubAccount: boolean; scopes?: string; private?: boolean };
+
+export type RepoLink = { clusterId: string; repo: string; branch: string; path: string; updatedAt: string };
+
+export type FixInput = { name: string; label: string; default?: string; placeholder?: string };
+
+export type FixOption = {
+  id: string;
+  title: string;
+  description: string;
+  target: { kind: string; name: string; namespace: string };
+  inputs: FixInput[];
+  unavailable?: string;
+};
+
+export type FixOptions = { failureType: FailureType; options: FixOption[]; link: RepoLink | null };
+
+export type FixPRResult = { url: string; number: number; branch: string; file: string; changes: string[] };
+
 export type AlertKind = "slack" | "discord" | "webhook";
 
 export type AlertCause = { key: string; title: string; failureType: FailureType; pods: string[]; fix?: string };
