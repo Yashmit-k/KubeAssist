@@ -8,8 +8,13 @@ import type {
   RegisteredCluster,
   Snapshot,
   StageEvent,
+  ChatMessage,
+  ChatReply,
+  ScanResult,
   TroubleshootResult,
   User,
+  VerifyRequest,
+  VerifyResult,
 } from "./types";
 
 // Empty base = same origin. In dev, Vite proxies /api to the Go backend;
@@ -90,6 +95,16 @@ export const api = {
     request<InvestigationSummary[]>(
       `${prefix(t)}/investigations?limit=100${namespace ? `&namespace=${enc(namespace)}` : ""}`,
     ),
+  /** Health scan: classify every unhealthy pod and group by root cause. */
+  scan: (t: ClusterTarget, namespace?: string) =>
+    request<ScanResult>(`${prefix(t)}/scan${namespace ? `?namespace=${enc(namespace)}` : ""}`, { method: "POST" }),
+  /** Ask about the cluster: the AI picks read-only tools, the backend runs them. */
+  chat: (t: ClusterTarget, messages: ChatMessage[]) =>
+    request<ChatReply>(`${prefix(t)}/chat`, { method: "POST", body: JSON.stringify({ messages }) }),
+  /** "Did my fix work?" — re-checks the pod, or its workload's newest pod. */
+  verify: (t: ClusterTarget, ns: string, name: string, body: VerifyRequest) =>
+    request<VerifyResult>(`${prefix(t)}/pods/${enc(ns)}/${enc(name)}/verify`, { method: "POST", body: JSON.stringify(body) }),
+
   investigation: (t: ClusterTarget, id: string) =>
     request<Investigation>(`${prefix(t)}/investigations/${enc(id)}`),
 

@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from app.chat.service import ChatError, chat_step
 from app.config import settings
 from app.pipeline.troubleshoot import TroubleshootError, run_troubleshoot
 from app.schema_util import validate_snapshot
@@ -44,6 +45,16 @@ async def troubleshoot(
         return await run_troubleshoot(snapshot, retriever)
     except TroubleshootError as e:
         raise HTTPException(status_code=500, detail={"code": "diagnosis_invalid", "message": str(e)}) from e
+
+
+@router.post("/ai/chat")
+async def chat(req: dict[str, Any], _: None = Depends(_auth)) -> dict[str, Any]:
+    """One step of the cluster chat loop (the Go backend runs the loop
+    and the read-only tools)."""
+    try:
+        return await chat_step(req)
+    except ChatError as e:
+        raise HTTPException(status_code=400, detail={"code": "invalid_chat", "message": str(e)}) from e
 
 
 @router.get("/ai/doc-search")

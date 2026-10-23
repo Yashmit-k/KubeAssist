@@ -315,22 +315,35 @@ func detectReadinessFailure(s *model.DiagnosticSnapshot) *model.DetectorResult {
 	}
 	for _, c := range s.Containers {
 		// The defining signature: container is RUNNING, has NOT
-		// restarted (RestartCount == 0 — if it had restarted, this is
-		// more likely ProbeFailure/CrashLoopBackOff territory, already
-		// checked earlier), but is NOT Ready.
-		if c.State.Phase == "running" && !c.Ready && c.RestartCount == 0 {
+		// restarted on its own (if it had, this is more likely
+		// ProbeFailure/CrashLoopBackOff territory, already checked
+		// earlier), but is NOT Ready. Restarts caused by the node or
+		// container runtime restarting (last termination reason
+		// "Unknown") are not the app's doing and don't count.
+		if c.State.Phase == "running" && !c.Ready && (c.RestartCount == 0 || restartedByNode(c)) {
+			restarts := "0 restarts"
+			if c.RestartCount > 0 {
+				restarts = fmt.Sprintf("%d restarts, all from node/runtime restarts", c.RestartCount)
+			}
 			return &model.DetectorResult{
 				FailureType: "ReadinessFailure",
 				Confidence:  0.8,
 				Evidence: []string{
 					fmt.Sprintf("Readiness probe failing: %s", msg),
-					fmt.Sprintf("Container %q running, 0 restarts, but not Ready", c.Name),
+					fmt.Sprintf("Container %q running, %s, but not Ready", c.Name, restarts),
 				},
 				SearchTerms: []string{"readiness probe", "dependency check", "database connection", "startup delay"},
 			}
 		}
 	}
 	return nil
+}
+
+// restartedByNode reports a container whose last termination came from
+// the node or container runtime restarting (the kubelet records reason
+// "Unknown", typically exit code 255), not from the app failing.
+func restartedByNode(c model.ContainerInfo) bool {
+	return c.LastState != nil && c.LastState.Phase == "terminated" && c.LastState.Reason == "Unknown"
 }
 
 func detectImagePull(s *model.DiagnosticSnapshot) *model.DetectorResult {

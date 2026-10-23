@@ -79,3 +79,28 @@ async def complete_json(system: str, prompt: str) -> dict[str, Any] | None:
     if not isinstance(content, str):
         raise LLMError("LLM response had no text content")
     return extract_json(content)
+
+
+async def complete_chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """One OpenAI-compatible chat completion with optional tool
+    definitions. Returns the assistant message (content and/or
+    tool_calls). Raises LLMError on failure; never called in mock mode."""
+    url = settings.llm_base_url.rstrip("/") + "/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if settings.llm_api_key:
+        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+    body: dict[str, Any] = {"model": settings.llm_model, "temperature": 0.1, "messages": messages}
+    if tools:
+        body["tools"] = tools
+    async with httpx.AsyncClient(timeout=settings.llm_timeout) as client:
+        try:
+            resp = await client.post(url, headers=headers, json=body)
+            resp.raise_for_status()
+            msg = resp.json()["choices"][0]["message"]
+        except httpx.HTTPStatusError as e:
+            raise LLMError(f"LLM returned HTTP {e.response.status_code}: {e.response.text[:200]}") from e
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
+            raise LLMError(f"LLM request failed: {e}") from e
+    if not isinstance(msg, dict):
+        raise LLMError("LLM response had no message")
+    return msg

@@ -96,7 +96,60 @@ export type DetectorResult = {
   evidence: string[];
   searchTerms: string[];
   relatedHints?: string[];
+  fix?: FixPlan;
 };
+
+/** Evidence-derived fix: exact values (facts) and ready-to-run steps. */
+export type FixPlan = {
+  facts?: Record<string, string>;
+  steps?: FixStep[];
+};
+
+export type FixStep = { description: string; command?: string | null; isWriteAction: boolean };
+
+export type ScanPod = { namespace: string; name: string; status: string; ready: string; restartCount: number };
+
+/** One root cause from a health scan and every pod it breaks. */
+export type ScanGroup = {
+  key: string;
+  title: string;
+  failureType: FailureType;
+  pods: ScanPod[];
+  evidence: string[];
+  fix?: FixPlan;
+};
+
+export type ScanResult = {
+  namespace?: string;
+  scannedAt: string;
+  totalPods: number;
+  checked: number;
+  truncated: boolean;
+  healthy: number;
+  groups: ScanGroup[];
+  errors: { namespace: string; name: string; error: string }[];
+};
+
+export type Verdict = "fixed" | "starting" | "still_failing" | "new_problem" | "not_found";
+
+export type VerifyResult = {
+  verdict: Verdict;
+  message: string;
+  pod?: ScanPod;
+  replaced: boolean;
+  failureType?: FailureType;
+  evidence: string[];
+  fix?: FixPlan;
+  checkedAt: string;
+};
+
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+
+export type ChatToolUse = { name: string; arguments: Record<string, unknown>; summary: string; ok: boolean };
+
+export type ChatReply = { reply: string; mode: "llm" | "rules"; tools: ChatToolUse[] };
+
+export type VerifyRequest = { failureType: string; owner?: string; serviceName?: string };
 
 export type Snapshot = {
   schemaVersion: string;
@@ -123,6 +176,7 @@ export type Snapshot = {
   };
   detector: DetectorResult;
   userQuestion?: string;
+  serviceName?: string | null;
   collectedAt: string;
 };
 

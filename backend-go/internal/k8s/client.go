@@ -29,11 +29,21 @@ import (
 // bounds), NOT for expected failure modes of external systems. Every
 // external-system call in this codebase (Kubernetes, the AI service,
 // Postgres) will follow this same (result, error) shape.
+const (
+	clientQPS   = 50
+	clientBurst = 100
+)
+
 func NewClientset(kubeconfigPath, kubeContext string) (*kubernetes.Clientset, error) {
 	restConfig, err := buildRESTConfig(kubeconfigPath, kubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: building rest config: %w", err)
 	}
+	// client-go's default client-side limit (5 QPS, burst 10) throttles
+	// a health scan, which collects several pods in parallel at ~6 reads
+	// each. These are all reads; 50 QPS is still gentle on an API server.
+	restConfig.QPS = clientQPS
+	restConfig.Burst = clientBurst
 
 	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
