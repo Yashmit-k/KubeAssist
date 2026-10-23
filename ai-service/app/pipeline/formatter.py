@@ -94,6 +94,18 @@ def format_evidence(snapshot: dict[str, Any]) -> str:
         for cm in rel["configMapRefs"]:
             lines.append(f"  - {cm.get('name')} present={cm.get('keysPresent') or []} missing={cm.get('keysMissing') or []}")
 
+    ro = snapshot.get("rollout") or {}
+    if ro:
+        lines.append(
+            f"RECENT ROLLOUT {ro.get('workload')}: pod runs revision {ro.get('revision')} "
+            f"(created {ro.get('rolledOutAt')}, latest={ro.get('latest')}); "
+            f"previous revision {ro.get('previousRevision') or 'none'} (created {ro.get('previousCreatedAt') or '-'})"
+        )
+        for ch in ro.get("changes") or []:
+            where = f" [{ch['container']}]" if ch.get("container") else ""
+            name = f" {ch['name']}" if ch.get("name") else ""
+            lines.append(f"  - {ch.get('field')}{name}{where}: {ch.get('from') or '(none)'} -> {ch.get('to') or '(none)'}")
+
     lines.append(f"DETECTOR failureType={det.get('failureType')} confidence={det.get('confidence')}")
     for ev in det.get("evidence") or []:
         lines.append(f"  - {ev}")

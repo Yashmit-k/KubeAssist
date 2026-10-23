@@ -2,13 +2,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, History, Loader2, Stethoscope, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
+import ReportButtons from "../components/ReportButtons";
 import VerifyFix from "../components/VerifyFix";
 import DiagnosisView from "../components/DiagnosisView";
 import RemoteGate from "../components/RemoteGate";
 import { Button, buttonClass, Card, cx, ErrorBox, PageHeader } from "../components/ui";
 import { troubleshootStream, type ApiError } from "../lib/api";
 import { useActiveCluster } from "../lib/clusters";
-import type { StageEvent, TroubleshootResult } from "../lib/types";
+import { diagnosisReport, reportFileName } from "../lib/report";
+import type { StageEvent, TroubleshootResult, VerifyResult } from "../lib/types";
 
 // The Go pipeline's stages, in order. "related" (pass-2) and "saving"
 // only happen sometimes; they're shown when the server reports them.
@@ -65,12 +67,14 @@ export default function Diagnose() {
   const [serviceName, setServiceName] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [run, setRun] = useState<Run>({ status: "idle", events: [] });
+  const [verified, setVerified] = useState<VerifyResult | null>(null);
   const cancel = useRef<(() => void) | null>(null);
 
   const start = useCallback(() => {
     if (!target) return;
     cancel.current?.();
     setRun({ status: "running", events: [] });
+    setVerified(null);
     cancel.current = troubleshootStream(
       target,
       ns,
@@ -180,8 +184,16 @@ export default function Diagnose() {
                   ns={ns}
                   name={name}
                   req={{ failureType: run.result.failureType, owner: run.result.detector.fix?.facts?.owner, serviceName: serviceName.trim() || undefined }}
+                  onResult={setVerified}
                 />
               )}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface px-4 py-3">
+                <span className="text-sm text-muted">Incident report{verified ? " (includes the latest check)" : ""}</span>
+                <ReportButtons
+                  filename={reportFileName(ns, name)}
+                  markdown={diagnosisReport({ cluster: cluster.label, namespace: ns, pod: name, diagnosis: run.result, question: question.trim() || undefined, verify: verified })}
+                />
+              </div>
               {run.result.investigationId && (
                 <Link to={`${base}/history/${run.result.investigationId}`} className={buttonClass("ghost", "text-xs")}>
                   <History className="size-3.5" /> Saved to history

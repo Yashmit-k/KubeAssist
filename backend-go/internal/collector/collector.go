@@ -84,10 +84,13 @@ func (c *Collector) CollectCore(ctx context.Context, namespace, podName string) 
 		return err
 	})
 
-	var owner *model.OwnerInfo
+	var (
+		owner   *model.OwnerInfo
+		rollout *model.RolloutInfo
+	)
 	g.Go(func() error {
 		var err error
-		owner, err = c.collectOwner(gctx, namespace, pod)
+		owner, rollout, err = c.collectOwner(gctx, namespace, pod)
 		return err
 	})
 
@@ -141,6 +144,7 @@ func (c *Collector) CollectCore(ctx context.Context, namespace, podName string) 
 		Events:         events,
 		Logs:           logs,
 		Owners:         owner,
+		Rollout:        rollout,
 		CollectedAt:    time.Now().UTC(),
 	}, nil
 }
@@ -278,7 +282,7 @@ func (c *Collector) collectEvents(ctx context.Context, namespace, podName string
 
 // collectOwner walks Pod -> ReplicaSet -> Deployment. Bare pods (no
 // ReplicaSet owner) return nil — not an error.
-func (c *Collector) collectOwner(ctx context.Context, namespace string, pod *corev1.Pod) (*model.OwnerInfo, error) {
+func (c *Collector) collectOwner(ctx context.Context, namespace string, pod *corev1.Pod) (*model.OwnerInfo, *model.RolloutInfo, error) {
 	var rsName string
 	for _, ref := range pod.OwnerReferences {
 		if ref.Kind == "ReplicaSet" {
@@ -287,32 +291,34 @@ func (c *Collector) collectOwner(ctx context.Context, namespace string, pod *cor
 		}
 	}
 	if rsName == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	rs, err := c.clientset.AppsV1().ReplicaSets(namespace).Get(ctx, rsName, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
-			return &model.OwnerInfo{ReplicaSet: &model.ReplicaSetRef{Name: rsName}}, nil
+			return &model.OwnerInfo{ReplicaSet: &model.ReplicaSetRef{Name: rsName}}, nil, nil
 		}
-		return nil, fmt.Errorf("getting replicaset %s: %w", rsName, err)
+		return nil, nil, fmt.Errorf("getting replicaset %s: %w", rsName, err)
 	}
 
 	info := &model.OwnerInfo{
 		ReplicaSet: &model.ReplicaSetRef{Name: rs.Name, DesiredReplicas: derefInt32(rs.Spec.Replicas, 0)},
 	}
+	var rollout *model.RolloutInfo
 	for _, ref := range rs.OwnerReferences {
 		if ref.Kind == "Deployment" {
 			dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 			if err == nil {
 				info.Deployment = &model.DeploymentRef{Name: dep.Name, Strategy: string(dep.Spec.Strategy.Type)}
+				rollout = c.collectRollout(ctx, dep, rs)
 			} else {
 				info.Deployment = &model.DeploymentRef{Name: ref.Name}
 			}
 			break
 		}
 	}
-	return info, nil
+	return info, rollout, nil
 }
 
 // collectLogs fetches current (and, after a restart, previous) logs for

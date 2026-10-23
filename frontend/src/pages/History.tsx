@@ -1,7 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { History as HistoryIcon } from "lucide-react";
 import { Link, useParams } from "react-router";
-import type { Snapshot } from "../lib/types";
+import { useState } from "react";
+import { diagnosisReport, reportFileName } from "../lib/report";
+import type { Snapshot, VerifyResult } from "../lib/types";
+import ReportButtons from "../components/ReportButtons";
 import VerifyFix from "../components/VerifyFix";
 import DiagnosisView from "../components/DiagnosisView";
 import RemoteGate from "../components/RemoteGate";
@@ -92,6 +95,7 @@ export function InvestigationDetail() {
   const { id = "" } = useParams();
   const cluster = useActiveCluster();
   const target = cluster.target;
+  const [verified, setVerified] = useState<VerifyResult | null>(null);
   const inv = useQuery({
     queryKey: ["investigation", targetKey(target), id],
     queryFn: () => api.investigation(target!, id),
@@ -118,9 +122,15 @@ export function InvestigationDetail() {
         }
         subtitle={`${dateTime(d.createdAt)} · ${modeLabel(d.diagnosis.mode).label}`}
         actions={
-          <Link to={`${base}/pods/${encodeURIComponent(d.namespace)}/${encodeURIComponent(d.podName)}`} className="text-sm text-accent hover:underline">
-            Open current pod →
-          </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            <ReportButtons
+              filename={reportFileName(d.namespace, d.podName, d.createdAt.slice(0, 10))}
+              markdown={diagnosisReport({ cluster: cluster.label, namespace: d.namespace, pod: d.podName, diagnosis: d.diagnosis, question: snap.userQuestion || undefined, verify: verified, generatedAt: new Date() })}
+            />
+            <Link to={`${base}/pods/${encodeURIComponent(d.namespace)}/${encodeURIComponent(d.podName)}`} className="text-sm text-accent hover:underline">
+              Open current pod →
+            </Link>
+          </div>
         }
       />
       <div className="grid gap-4 lg:grid-cols-3">
@@ -132,6 +142,7 @@ export function InvestigationDetail() {
               ns={d.namespace}
               name={d.podName}
               req={{ failureType: d.diagnosis.failureType, owner: ownerOf(snap), serviceName: snap.serviceName ?? undefined }}
+              onResult={setVerified}
             />
           )}
         </div>

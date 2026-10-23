@@ -111,7 +111,7 @@ func TestContract_SnapshotsMatchSchema(t *testing.T) {
 				snap.Related = rel
 				snap.Detector = detect.DetectRelated(snap, core)
 			}
-			snap.Detector.Fix = detect.PlanFix(snap)
+			detect.Enrich(snap)
 			snap.UserQuestion = "why is this failing?"
 			redact.Snapshot(snap)
 			validateAgainst(t, schema, snap)

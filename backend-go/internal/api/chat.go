@@ -205,7 +205,7 @@ func chatDiagnose(ctx context.Context, src clusterSource, snap *model.Diagnostic
 			snap.Detector = detect.DetectRelated(snap, core)
 		}
 	}
-	snap.Detector.Fix = detect.PlanFix(snap)
+	detect.Enrich(snap)
 	redact.Snapshot(snap)
 	d := snap.Detector
 	_, cause := detect.RootCause(snap)

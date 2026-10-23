@@ -38,9 +38,13 @@ type DiagnosticSnapshot struct {
 	Events         []Event         `json:"events"`
 	Logs           LogBundle       `json:"logs"`
 	Owners         *OwnerInfo      `json:"owners,omitempty"`
-	Related        *RelatedInfo    `json:"related,omitempty"`
-	Detector       DetectorResult  `json:"detector"`
-	UserQuestion   string          `json:"userQuestion,omitempty"`
+	// Rollout is the owning Deployment's revision history as it relates
+	// to this pod: which revision it runs and what changed from the
+	// previous one. Nil for pods without a Deployment.
+	Rollout      *RolloutInfo   `json:"rollout,omitempty"`
+	Related      *RelatedInfo   `json:"related,omitempty"`
+	Detector     DetectorResult `json:"detector"`
+	UserQuestion string         `json:"userQuestion,omitempty"`
 	// ServiceName lets the user (or a re-collection round) tell Go which
 	// specific Service to evaluate for a selector/endpoint mismatch,
 	// rather than Go guessing across every Service in the namespace —
@@ -241,4 +245,27 @@ type FixStep struct {
 	Description   string `json:"description"`
 	Command       string `json:"command,omitempty"`
 	IsWriteAction bool   `json:"isWriteAction"`
+}
+
+// RolloutInfo relates a pod to its Deployment's rollout history, so a
+// failure can be lined up with the change that preceded it.
+type RolloutInfo struct {
+	Workload          string           `json:"workload"`    // "deployment/api"
+	Revision          int64            `json:"revision"`    // the revision this pod runs
+	RolledOutAt       time.Time        `json:"rolledOutAt"` // when this revision last went live
+	Latest            bool             `json:"latest"`      // it is the Deployment's newest revision
+	PreviousRevision  int64            `json:"previousRevision,omitempty"`
+	PreviousCreatedAt *time.Time       `json:"previousCreatedAt,omitempty"`
+	Changes           []TemplateChange `json:"changes"`
+}
+
+// TemplateChange is one difference between the previous revision's pod
+// template and this one's. Values of sensitive-looking env vars are
+// never included.
+type TemplateChange struct {
+	Field     string `json:"field"` // image, command, args, env, resources, livenessProbe, readinessProbe, startupProbe, container, volume, serviceAccount
+	Container string `json:"container,omitempty"`
+	Name      string `json:"name,omitempty"` // env var / volume name
+	From      string `json:"from,omitempty"`
+	To        string `json:"to,omitempty"`
 }

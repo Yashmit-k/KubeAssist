@@ -1,0 +1,32 @@
+# Bad-rollout scenario, revision 2: the "release" that breaks it — new
+# image tag, MODE switched to a value the app rejects, new command.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-rollout
+  namespace: kubeassist-lab
+  labels:
+    app: bad-rollout
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bad-rollout
+  template:
+    metadata:
+      labels:
+        app: bad-rollout
+    spec:
+      containers:
+        - name: application
+          image: busybox:1.37
+          env:
+            - name: MODE
+              value: fast
+          command: ["sh", "-c", "echo \"starting in $MODE mode\"; [ \"$MODE\" = safe ] || { echo \"FATAL: unsupported MODE=$MODE (expected: safe)\"; exit 1; }; sleep 3600000"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
