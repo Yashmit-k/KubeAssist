@@ -326,3 +326,17 @@ func TestLoad_AlertSettings(t *testing.T) {
 		t.Errorf("overrides: %+v %v", cfg, err)
 	}
 }
+
+func TestLoad_GitHubTokenKey(t *testing.T) {
+	if cfg, _ := Load(); cfg.GitHubTokenKey != nil {
+		t.Error("no key by default")
+	}
+	t.Setenv("GITHUB_TOKEN_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=") // 32 bytes
+	if cfg, err := Load(); err != nil || len(cfg.GitHubTokenKey) != 32 {
+		t.Errorf("valid key: %v", err)
+	}
+	t.Setenv("GITHUB_TOKEN_KEY", "c2hvcnQ=")
+	if _, err := Load(); err == nil {
+		t.Error("a short key must be refused")
+	}
+}

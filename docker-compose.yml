@@ -60,6 +60,8 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      # Encrypts users' GitHub repository tokens; enables fix pull requests.
+      GITHUB_TOKEN_KEY: ${GITHUB_TOKEN_KEY:-}
       AUTH_DEV_LOGIN: ${AUTH_DEV_LOGIN:-true}
       # nginx (the frontend container) appends the client address.
       TRUST_PROXY_HEADERS: "true"

@@ -8,6 +8,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strconv"
@@ -138,6 +139,11 @@ type Config struct {
 	RateLimitTroubleshoot string
 	RateLimitLogin        string
 
+	// GitHubTokenKey (GITHUB_TOKEN_KEY, base64 of 32 random bytes)
+	// encrypts users' GitHub repository tokens at rest. Set it, together
+	// with GitHub sign-in, to enable fix pull requests.
+	GitHubTokenKey []byte
+
 	// AlertInterval is how often clusters with alerts enabled are
 	// scanned (ALERT_INTERVAL, minimum 15s).
 	AlertInterval time.Duration
@@ -229,6 +235,14 @@ func Load() (*Config, error) {
 	cfg.DBConnectTimeout, err = getDurationOrDefault("DB_CONNECT_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("config: invalid DB_CONNECT_TIMEOUT: %w", err)
+	}
+
+	if raw := os.Getenv("GITHUB_TOKEN_KEY"); raw != "" {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil || len(key) != 32 {
+			return nil, fmt.Errorf("config: GITHUB_TOKEN_KEY must be base64 of exactly 32 bytes (openssl rand -base64 32)")
+		}
+		cfg.GitHubTokenKey = key
 	}
 
 	cfg.AlertInterval, err = getDurationOrDefault("ALERT_INTERVAL", time.Minute)

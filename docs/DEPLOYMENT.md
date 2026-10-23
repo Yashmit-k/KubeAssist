@@ -38,6 +38,9 @@ PUBLIC_URL=https://app.example.com                     # the UI's origin; https 
 GITHUB_CLIENT_ID=<GitHub OAuth App client ID>
 GITHUB_CLIENT_SECRET=<GitHub OAuth App client secret>
 # AUTH_DEV_LOGIN must stay unset (it is refused with an https PUBLIC_URL anyway)
+# Fix pull requests: encrypts users' GitHub repository tokens at rest.
+# Back it up with your other secrets; changing it invalidates stored tokens.
+GITHUB_TOKEN_KEY=<openssl rand -base64 32>
 
 # Alerts: how often clusters with alerts enabled are scanned (min 15s).
 # Never set ALERTS_ALLOW_PRIVATE_WEBHOOKS on a reachable deployment.

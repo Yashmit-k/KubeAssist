@@ -112,6 +112,11 @@ func (s *Server) handleRevokeCluster(w http.ResponseWriter, r *http.Request, _ c
 		writeError(w, http.StatusInternalServerError, "revoke_failed", err.Error())
 		return
 	}
+	if s.RepoLinks != nil {
+		if err := s.RepoLinks.DeleteRepoLink(r.Context(), clusterID); err != nil {
+			log.Printf("api: deleting repo link of revoked cluster %q: %v", clusterID, err)
+		}
+	}
 	if s.Alerts != nil {
 		if err := s.Alerts.Store().DeleteAlertConfig(r.Context(), clusterID); err != nil {
 			log.Printf("api: deleting alert config of revoked cluster %q: %v", clusterID, err)

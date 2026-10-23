@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, History, Loader2, Stethoscope, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
+import FixPRPanel from "../components/FixPRPanel";
 import ReportButtons from "../components/ReportButtons";
 import VerifyFix from "../components/VerifyFix";
 import DiagnosisView from "../components/DiagnosisView";
@@ -187,6 +188,7 @@ export default function Diagnose() {
                   onResult={setVerified}
                 />
               )}
+              {cluster.isRemote && run.result.failureType !== "Healthy" && <FixPRPanel clusterId={cluster.key} ns={ns} name={name} />}
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface px-4 py-3">
                 <span className="text-sm text-muted">Incident report{verified ? " (includes the latest check)" : ""}</span>
                 <ReportButtons

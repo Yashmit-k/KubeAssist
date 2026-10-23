@@ -10,6 +10,8 @@ package auth
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -88,6 +90,12 @@ type Config struct {
 
 	// HTTPClient is used for calls to the identity provider.
 	HTTPClient *http.Client
+
+	// TokenKey (32 bytes) encrypts GitHub repository-access tokens at
+	// rest; with TokenStore it enables "Connect GitHub repositories"
+	// (fix pull requests). Nil disables the feature.
+	TokenKey   []byte
+	TokenStore TokenStore
 }
 
 // Manager issues and resolves sessions and serves the /api/auth routes.
@@ -101,6 +109,8 @@ type Manager struct {
 	github         *oauth2.Config
 	githubAPI      string
 	httpClient     *http.Client
+	tokens         TokenStore
+	aead           cipher.AEAD // seals repository tokens; nil when disabled
 }
 
 // NewManager validates cfg and builds a Manager.
@@ -163,6 +173,19 @@ func NewManager(store Store, cfg Config) (*Manager, error) {
 		if m.githubAPI == "" {
 			m.githubAPI = "https://api.github.com"
 		}
+	}
+	if len(cfg.TokenKey) > 0 && cfg.TokenStore != nil {
+		if len(cfg.TokenKey) != 32 {
+			return nil, errors.New("auth: GITHUB_TOKEN_KEY must decode to exactly 32 bytes (openssl rand -base64 32)")
+		}
+		block, err := aes.NewCipher(cfg.TokenKey)
+		if err != nil {
+			return nil, err
+		}
+		if m.aead, err = cipher.NewGCM(block); err != nil {
+			return nil, err
+		}
+		m.tokens = cfg.TokenStore
 	}
 	return m, nil
 }
@@ -260,6 +283,12 @@ func (m *Manager) RegisterRoutes(mux *http.ServeMux, limit Limiter) {
 	}
 	if m.cfg.DevLogin {
 		mux.HandleFunc("POST /api/auth/dev-login", limit(m.handleDevLogin))
+	}
+	if m.RepoAccessAvailable() {
+		mux.HandleFunc("GET /api/auth/github/repo-access", m.handleRepoAccessStatus)
+		mux.HandleFunc("GET /api/auth/github/repo-access/start", limit(m.handleRepoAccessStart))
+		mux.HandleFunc("GET /api/auth/github/callback/repo", limit(m.handleRepoAccessCallback))
+		mux.HandleFunc("DELETE /api/auth/github/repo-access", m.handleRepoAccessDisconnect)
 	}
 }
 
@@ -365,6 +394,12 @@ type MemoryStore struct {
 	users    map[string]model.User // keyed by ID
 	byIdent  map[string]string     // provider + "\x00" + providerUserID -> ID
 	sessions map[string]memSession
+	tokens   map[string]memToken
+}
+
+type memToken struct {
+	sealed []byte
+	scopes string
 }
 
 type memSession struct {
@@ -374,7 +409,7 @@ type memSession struct {
 
 // NewMemoryStore returns an empty MemoryStore.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{users: map[string]model.User{}, byIdent: map[string]string{}, sessions: map[string]memSession{}}
+	return &MemoryStore{users: map[string]model.User{}, byIdent: map[string]string{}, sessions: map[string]memSession{}, tokens: map[string]memToken{}}
 }
 
 func (s *MemoryStore) UpsertUser(_ context.Context, u model.User) (model.User, error) {
@@ -422,6 +457,30 @@ func (s *MemoryStore) DeleteSession(_ context.Context, tokenHash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, tokenHash)
+	return nil
+}
+
+func (s *MemoryStore) SaveGitHubToken(_ context.Context, userID string, sealed []byte, scopes string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokens[userID] = memToken{sealed: append([]byte{}, sealed...), scopes: scopes}
+	return nil
+}
+
+func (s *MemoryStore) GitHubToken(_ context.Context, userID string) ([]byte, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tokens[userID]
+	if !ok {
+		return nil, "", nil
+	}
+	return t.sealed, t.scopes, nil
+}
+
+func (s *MemoryStore) DeleteGitHubToken(_ context.Context, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tokens, userID)
 	return nil
 }
 

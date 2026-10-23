@@ -16,6 +16,7 @@ import (
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/alerts"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/auth"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/collector"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/fixpr"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/store"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/tunnel"
@@ -73,6 +74,10 @@ type Server struct {
 	// the /alerts routes.
 	Alerts        *alerts.Watcher
 	AlertInterval time.Duration
+
+	// RepoLinks stores cluster -> GitHub repository links; with
+	// repository access in Auth it enables fix pull requests.
+	RepoLinks fixpr.LinkStore
 
 	// TrustProxyHeaders makes rate limiting key anonymous callers by the
 	// X-Forwarded-For address a trusted reverse proxy appended.
@@ -133,6 +138,13 @@ func (s *Server) NewRouter() *http.ServeMux {
 		mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/verify", remote(s.limitScoped(s.TroubleshootLimiter, s.handleVerify)))
 		mux.HandleFunc("POST /api/remote/{clusterId}/scan", remote(s.limitScoped(s.TroubleshootLimiter, s.handleScan)))
 		mux.HandleFunc("POST /api/remote/{clusterId}/chat", remote(s.limitScoped(s.TroubleshootLimiter, s.handleChat)))
+		if s.fixPRsEnabled() {
+			mux.HandleFunc("GET /api/remote/{clusterId}/repo", remote(s.handleGetRepoLink))
+			mux.HandleFunc("PUT /api/remote/{clusterId}/repo", remote(s.handlePutRepoLink))
+			mux.HandleFunc("DELETE /api/remote/{clusterId}/repo", remote(s.handleDeleteRepoLink))
+			mux.HandleFunc("GET /api/remote/{clusterId}/pods/{ns}/{name}/fix-pr", remote(s.handleFixOptions))
+			mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/fix-pr", remote(s.limitScoped(s.TroubleshootLimiter, s.handleOpenFixPR)))
+		}
 		if s.Alerts != nil {
 			mux.HandleFunc("GET /api/remote/{clusterId}/alerts", remote(s.handleGetAlerts))
 			mux.HandleFunc("PUT /api/remote/{clusterId}/alerts", remote(s.handlePutAlerts))
@@ -321,6 +333,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Auth != nil {
 		resp.Features = append(resp.Features, "accounts")
+	}
+	if s.fixPRsEnabled() {
+		resp.Features = append(resp.Features, "fix-prs")
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

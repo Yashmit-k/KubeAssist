@@ -20,6 +20,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/alerts"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/fixpr"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/tunnel"
 )
@@ -125,6 +126,21 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
 
 ALTER TABLE clusters ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_clusters_owner ON clusters (owner_id);
+
+CREATE TABLE IF NOT EXISTS github_tokens (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    token_sealed BYTEA NOT NULL,
+    scopes TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS cluster_repos (
+    cluster_id TEXT PRIMARY KEY REFERENCES clusters(cluster_id) ON DELETE CASCADE,
+    repo TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    path TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS alert_configs (
     cluster_id TEXT PRIMARY KEY REFERENCES clusters(cluster_id) ON DELETE CASCADE,
@@ -401,4 +417,66 @@ func (s *Store) ListAlertConfigs(ctx context.Context) ([]alerts.Config, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// --- auth.TokenStore implementation (sealed GitHub repository tokens) ---
+
+func (s *Store) SaveGitHubToken(ctx context.Context, userID string, sealed []byte, scopes string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO github_tokens (user_id, token_sealed, scopes) VALUES ($1, $2, $3)
+		 ON CONFLICT (user_id) DO UPDATE SET token_sealed = EXCLUDED.token_sealed, scopes = EXCLUDED.scopes, updated_at = now()`,
+		userID, sealed, scopes)
+	if err != nil {
+		return fmt.Errorf("store: saving GitHub token: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GitHubToken(ctx context.Context, userID string) ([]byte, string, error) {
+	var sealed []byte
+	var scopes string
+	err := s.db.QueryRowContext(ctx, `SELECT token_sealed, scopes FROM github_tokens WHERE user_id = $1`, userID).Scan(&sealed, &scopes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("store: reading GitHub token: %w", err)
+	}
+	return sealed, scopes, nil
+}
+
+func (s *Store) DeleteGitHubToken(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM github_tokens WHERE user_id = $1`, userID)
+	return err
+}
+
+// --- fixpr.LinkStore implementation ---
+
+func (s *Store) GetRepoLink(ctx context.Context, clusterID string) (*fixpr.RepoLink, error) {
+	var l fixpr.RepoLink
+	err := s.db.QueryRowContext(ctx, `SELECT cluster_id, repo, branch, path, updated_at FROM cluster_repos WHERE cluster_id = $1`, clusterID).
+		Scan(&l.ClusterID, &l.Repo, &l.Branch, &l.Path, &l.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: reading repo link: %w", err)
+	}
+	return &l, nil
+}
+
+func (s *Store) PutRepoLink(ctx context.Context, l fixpr.RepoLink) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO cluster_repos (cluster_id, repo, branch, path) VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (cluster_id) DO UPDATE SET repo = EXCLUDED.repo, branch = EXCLUDED.branch, path = EXCLUDED.path, updated_at = now()`,
+		l.ClusterID, l.Repo, l.Branch, l.Path)
+	if err != nil {
+		return fmt.Errorf("store: saving repo link: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteRepoLink(ctx context.Context, clusterID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM cluster_repos WHERE cluster_id = $1`, clusterID)
+	return err
 }

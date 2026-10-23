@@ -9,6 +9,10 @@ import type {
   Snapshot,
   StageEvent,
   AlertConfig,
+  FixOptions,
+  FixPRResult,
+  RepoAccess,
+  RepoLink,
   AlertKind,
   ChatMessage,
   ChatReply,
@@ -100,6 +104,23 @@ export const api = {
   /** Health scan: classify every unhealthy pod and group by root cause. */
   scan: (t: ClusterTarget, namespace?: string) =>
     request<ScanResult>(`${prefix(t)}/scan${namespace ? `?namespace=${enc(namespace)}` : ""}`, { method: "POST" }),
+  /** GitHub repository access (separate from sign-in) for fix pull requests. */
+  repoAccess: () => request<RepoAccess>("/api/auth/github/repo-access"),
+  disconnectRepoAccess: () => request<void>("/api/auth/github/repo-access", { method: "DELETE" }),
+  repoAccessStartUrl: (includePrivate: boolean, next: string) =>
+    `${BASE}/api/auth/github/repo-access/start?private=${includePrivate ? 1 : 0}&next=${enc(next)}`,
+  repoLink: (clusterId: string) => request<{ link: RepoLink | null }>(`/api/remote/${enc(clusterId)}/repo`),
+  saveRepoLink: (clusterId: string, body: { repo: string; branch?: string; path?: string }) =>
+    request<{ link: RepoLink }>(`/api/remote/${enc(clusterId)}/repo`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteRepoLink: (clusterId: string) => request<void>(`/api/remote/${enc(clusterId)}/repo`, { method: "DELETE" }),
+  fixOptions: (clusterId: string, ns: string, name: string) =>
+    request<FixOptions>(`/api/remote/${enc(clusterId)}/pods/${enc(ns)}/${enc(name)}/fix-pr`),
+  openFixPR: (clusterId: string, ns: string, name: string, optionId: string, inputs: Record<string, string>) =>
+    request<FixPRResult>(`/api/remote/${enc(clusterId)}/pods/${enc(ns)}/${enc(name)}/fix-pr`, {
+      method: "POST",
+      body: JSON.stringify({ optionId, inputs }),
+    }),
+
   /** Alerts for a connected cluster (owner only). */
   alerts: (clusterId: string) => request<AlertConfig>(`/api/remote/${enc(clusterId)}/alerts`),
   saveAlerts: (clusterId: string, body: { kind: AlertKind; url?: string; enabled: boolean }) =>

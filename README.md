@@ -90,6 +90,7 @@ Go backend (environment variables):
 | `MAX_CLUSTERS_PER_USER` | `10` | Registrations per account (`0` = unlimited) |
 | `RATE_LIMIT_REGISTER`, `RATE_LIMIT_TROUBLESHOOT`, `RATE_LIMIT_LOGIN` | `10/h`, `30/m`, `30/m` | Per user / per user-or-IP / per IP; `off` disables |
 | `TRUST_PROXY_HEADERS` | `false` | Key anonymous rate limits by `X-Forwarded-For` (only behind your own proxy) |
+| `GITHUB_TOKEN_KEY` | — | Base64 32-byte key; with GitHub sign-in, enables fix pull requests (repository tokens are stored encrypted with it) |
 | `ALERT_INTERVAL` | `60s` | How often clusters with alerts enabled are scanned (min 15s) |
 | `ALERTS_ALLOW_PRIVATE_WEBHOOKS` | `false` | Let alert webhooks target http:// and private addresses — local testing only |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Browser origins when the UI is on another origin |

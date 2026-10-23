@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/alerts"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/fixpr"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
@@ -34,7 +35,7 @@ func openTestStore(t *testing.T) *Store {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `TRUNCATE investigations, alert_configs, clusters, sessions, users;`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `TRUNCATE investigations, alert_configs, cluster_repos, github_tokens, clusters, sessions, users;`); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -202,5 +203,47 @@ func TestStore_AlertConfigs(t *testing.T) {
 	}
 	if err := s.PutAlertConfig(ctx, alerts.Config{ClusterID: "ghost", OwnerID: u.ID, Kind: "slack", URL: "x"}); err == nil {
 		t.Error("a config for an unregistered cluster must be rejected")
+	}
+}
+
+func TestStore_GitHubTokensAndRepoLinks(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	u, _ := s.UpsertUser(ctx, model.User{Provider: "github", ProviderUserID: "7", Login: "o"})
+	if sealed, _, err := s.GitHubToken(ctx, u.ID); sealed != nil || err != nil {
+		t.Fatalf("none yet: %v %v", sealed, err)
+	}
+	if err := s.SaveGitHubToken(ctx, u.ID, []byte{1, 2, 3}, "public_repo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveGitHubToken(ctx, u.ID, []byte{4, 5}, "repo"); err != nil { // replace
+		t.Fatal(err)
+	}
+	sealed, scopes, err := s.GitHubToken(ctx, u.ID)
+	if err != nil || string(sealed) != string([]byte{4, 5}) || scopes != "repo" {
+		t.Fatalf("got %v %q %v", sealed, scopes, err)
+	}
+	if err := s.DeleteGitHubToken(ctx, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sealed, _, _ := s.GitHubToken(ctx, u.ID); sealed != nil {
+		t.Error("token must be deleted")
+	}
+
+	if err := s.SaveCluster(ctx, "prod", "h", u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutRepoLink(ctx, fixpr.RepoLink{ClusterID: "prod", Repo: "o/r", Branch: "main", Path: "deploy"}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := s.GetRepoLink(ctx, "prod")
+	if err != nil || l == nil || l.Repo != "o/r" || l.Path != "deploy" || l.UpdatedAt.IsZero() {
+		t.Fatalf("link = %+v %v", l, err)
+	}
+	if err := s.DeleteCluster(ctx, "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := s.GetRepoLink(ctx, "prod"); l != nil {
+		t.Error("the link must cascade with the cluster")
 	}
 }

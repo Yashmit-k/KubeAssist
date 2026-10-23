@@ -21,6 +21,7 @@ import (
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/auth"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/collector"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/config"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/fixpr"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/k8s"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/store"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/tunnel"
@@ -127,9 +128,19 @@ func main() {
 		if cfg.GitHubClientID != "" || cfg.GitHubClientSecret != "" {
 			authCfg.GitHub = &auth.GitHubConfig{ClientID: cfg.GitHubClientID, ClientSecret: cfg.GitHubClientSecret}
 		}
+		if cfg.GitHubTokenKey != nil {
+			if ts, ok := accounts.(auth.TokenStore); ok {
+				authCfg.TokenKey, authCfg.TokenStore = cfg.GitHubTokenKey, ts
+			}
+		}
 		authMgr, err = auth.NewManager(accounts, authCfg)
 		if err != nil {
 			log.Fatalf("auth: %v", err)
+		}
+		if authMgr.RepoAccessAvailable() {
+			log.Println("fix pull requests enabled (users can connect GitHub repositories)")
+		} else if authCfg.GitHub != nil {
+			log.Println("fix pull requests disabled: set GITHUB_TOKEN_KEY (openssl rand -base64 32) to enable them")
 		}
 		switch providers := authMgr.Providers(); {
 		case len(providers) == 0:
@@ -156,6 +167,11 @@ func main() {
 		publicURL := strings.TrimRight(cfg.PublicURL, "/")
 		watcher = alerts.NewWatcher(alertStore, nil, alerts.NewSender(cfg.AlertsAllowPrivateWebhooks), cfg.AlertInterval,
 			func(id string) string { return publicURL + "/c/" + id + "/scan" })
+	}
+
+	var repoLinks fixpr.LinkStore = fixpr.NewMemoryLinks()
+	if st != nil {
+		repoLinks = st
 	}
 
 	limiter := func(name, spec string) *api.RateLimiter {
@@ -189,6 +205,7 @@ func main() {
 		LoginLimiter:        limiter("RATE_LIMIT_LOGIN", cfg.RateLimitLogin),
 		TrustProxyHeaders:   cfg.TrustProxyHeaders,
 		Alerts:              watcher,
+		RepoLinks:           repoLinks,
 		AlertInterval:       cfg.AlertInterval,
 	}
 
