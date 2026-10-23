@@ -30,3 +30,15 @@ describe("podTone", () => {
     expect(podTone({ status: "Running", ready: "2/2" })).toBe("ok");
   });
 });
+
+import { goDuration } from "./format";
+
+describe("goDuration", () => {
+  it.each([
+    ["1m0s", "1 min"],
+    ["30s", "30 s"],
+    ["1h30m0s", "1 h 30 min"],
+    ["2m30s", "2 min 30 s"],
+    ["weird", "weird"],
+  ])("%s -> %s", (d, want) => expect(goDuration(d)).toBe(want));
+});

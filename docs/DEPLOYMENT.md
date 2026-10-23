@@ -39,6 +39,10 @@ GITHUB_CLIENT_ID=<GitHub OAuth App client ID>
 GITHUB_CLIENT_SECRET=<GitHub OAuth App client secret>
 # AUTH_DEV_LOGIN must stay unset (it is refused with an https PUBLIC_URL anyway)
 
+# Alerts: how often clusters with alerts enabled are scanned (min 15s).
+# Never set ALERTS_ALLOW_PRIVATE_WEBHOOKS on a reachable deployment.
+ALERT_INTERVAL=60s
+
 # Abuse limits (defaults shown; "off" disables)
 MAX_CLUSTERS_PER_USER=10
 RATE_LIMIT_REGISTER=10/h                               # per user

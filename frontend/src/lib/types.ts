@@ -156,6 +156,27 @@ export type Rollout = {
   changes: TemplateChange[];
 };
 
+export type AlertKind = "slack" | "discord" | "webhook";
+
+export type AlertCause = { key: string; title: string; failureType: FailureType; pods: string[]; fix?: string };
+
+export type AlertConfig = {
+  configured: boolean;
+  kind?: AlertKind;
+  url?: string; // masked
+  enabled: boolean;
+  updatedAt?: string;
+  interval: string;
+  status: {
+    lastScanAt?: string;
+    lastScanError?: string;
+    baseline: boolean;
+    active: (AlertCause & { since: string })[];
+    lastNotifiedAt?: string;
+    lastDeliveryError?: string;
+  };
+};
+
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export type ChatToolUse = { name: string; arguments: Record<string, unknown>; summary: string; ok: boolean };

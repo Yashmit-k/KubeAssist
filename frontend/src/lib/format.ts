@@ -77,3 +77,14 @@ export function podTone(p: { status: string; ready: string }): Tone {
   if (tone === "ok" && p.status === "Running" && total > 0 && ready < total) return "warn";
   return tone;
 }
+
+/** A Go duration string ("1m0s", "30s", "1h30m0s") in plain words. */
+export function goDuration(d: string): string {
+  const m = d.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/);
+  if (!m || !d) return d;
+  const parts: string[] = [];
+  if (m[1] && m[1] !== "0") parts.push(`${m[1]} h`);
+  if (m[2] && m[2] !== "0") parts.push(`${m[2]} min`);
+  if (m[3] && Number(m[3]) !== 0) parts.push(`${m[3]} s`);
+  return parts.join(" ") || "0 s";
+}

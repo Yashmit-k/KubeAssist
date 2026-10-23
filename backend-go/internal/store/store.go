@@ -19,6 +19,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/alerts"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/tunnel"
 )
@@ -124,6 +125,15 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
 
 ALTER TABLE clusters ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_clusters_owner ON clusters (owner_id);
+
+CREATE TABLE IF NOT EXISTS alert_configs (
+    cluster_id TEXT PRIMARY KEY REFERENCES clusters(cluster_id) ON DELETE CASCADE,
+    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    url TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("store: running migration: %w", err)
@@ -337,4 +347,58 @@ func (s *Store) SessionUser(ctx context.Context, tokenHash string) (*model.User,
 func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = $1`, tokenHash)
 	return err
+}
+
+// --- alerts.Store implementation ---
+
+// GetAlertConfig returns a cluster's alert config, or (nil, nil).
+func (s *Store) GetAlertConfig(ctx context.Context, clusterID string) (*alerts.Config, error) {
+	var c alerts.Config
+	err := s.db.QueryRowContext(ctx,
+		`SELECT cluster_id, owner_id::text, kind, url, enabled, updated_at FROM alert_configs WHERE cluster_id = $1`, clusterID,
+	).Scan(&c.ClusterID, &c.OwnerID, &c.Kind, &c.URL, &c.Enabled, &c.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: reading alert config: %w", err)
+	}
+	return &c, nil
+}
+
+// PutAlertConfig creates or replaces a cluster's alert config.
+func (s *Store) PutAlertConfig(ctx context.Context, c alerts.Config) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO alert_configs (cluster_id, owner_id, kind, url, enabled) VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (cluster_id) DO UPDATE
+		   SET owner_id = EXCLUDED.owner_id, kind = EXCLUDED.kind, url = EXCLUDED.url, enabled = EXCLUDED.enabled, updated_at = now()`,
+		c.ClusterID, c.OwnerID, c.Kind, c.URL, c.Enabled)
+	if err != nil {
+		return fmt.Errorf("store: saving alert config: %w", err)
+	}
+	return nil
+}
+
+// DeleteAlertConfig removes a cluster's alert config.
+func (s *Store) DeleteAlertConfig(ctx context.Context, clusterID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM alert_configs WHERE cluster_id = $1`, clusterID)
+	return err
+}
+
+// ListAlertConfigs returns every alert config.
+func (s *Store) ListAlertConfigs(ctx context.Context) ([]alerts.Config, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT cluster_id, owner_id::text, kind, url, enabled, updated_at FROM alert_configs`)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing alert configs: %w", err)
+	}
+	defer rows.Close()
+	out := []alerts.Config{}
+	for rows.Next() {
+		var c alerts.Config
+		if err := rows.Scan(&c.ClusterID, &c.OwnerID, &c.Kind, &c.URL, &c.Enabled, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

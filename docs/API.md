@@ -204,6 +204,40 @@ planner picks one tool and the answer is composed from its result. Pod names may
 be partial; ambiguous names come back as candidates. Needs the AI service (`503
 ai_unavailable` otherwise). Nothing is ever executed on the cluster.
 
+## Alerts (remote clusters, owner only)
+
+KubeAssist scans every cluster that has alerts enabled every `ALERT_INTERVAL`
+(default 60 s) using the health scan, and posts to the owner's webhook when a
+root cause **starts** or is **resolved** — one message per check, batching
+everything that changed. A change must be seen in 2 consecutive scans before it
+is reported (pods that flap between crash and "Running" don't spam), problems
+that already exist when alerts are enabled are tracked silently (no alert storm),
+and clusters whose agent is offline are skipped, never "resolved".
+
+`GET /api/remote/{clusterId}/alerts` →
+
+```json
+{"configured":true,"kind":"slack","url":"https://hooks.slack.com/…1234","enabled":true,"updatedAt":"...","interval":"1m0s",
+ "status":{"lastScanAt":"...","baseline":true,"active":[{"key":"...","title":"...","failureType":"OOMKilled","pods":["lab/oom-1"],"fix":"kubectl ...","since":"..."}],
+           "lastNotifiedAt":"...","lastDeliveryError":"..."}}
+```
+
+The webhook URL is a secret and is only ever returned masked.
+
+`PUT .../alerts` `{"kind":"slack|discord|webhook","url":"https://...","enabled":true}` saves the
+config (omit `url` to keep the stored one). `DELETE .../alerts` removes it (revoking
+the cluster removes it too). `POST .../alerts/test` sends a test message → `{"ok":true}`
+or `{"ok":false,"error":"..."}`.
+
+Payloads: Slack `{"text"}`, Discord `{"content"}` (≤2000 chars), generic
+`{"source":"kubeassist","event":"change|test","cluster","new":[cause],"resolved":[cause],"url"}`.
+
+Webhook URLs are fetched by the server, so they must be `https`, may not carry
+credentials, and the connection is refused when the host resolves to a private,
+loopback, link-local (incl. cloud metadata), CGNAT or multicast address; redirects
+are not followed. `ALERTS_ALLOW_PRIVATE_WEBHOOKS=true` lifts this for local
+development only.
+
 ## Investigation history
 
 Requires `DATABASE_URL` (else `503 store_unavailable`). History is scoped per

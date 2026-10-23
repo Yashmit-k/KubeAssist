@@ -90,6 +90,8 @@ Go backend (environment variables):
 | `MAX_CLUSTERS_PER_USER` | `10` | Registrations per account (`0` = unlimited) |
 | `RATE_LIMIT_REGISTER`, `RATE_LIMIT_TROUBLESHOOT`, `RATE_LIMIT_LOGIN` | `10/h`, `30/m`, `30/m` | Per user / per user-or-IP / per IP; `off` disables |
 | `TRUST_PROXY_HEADERS` | `false` | Key anonymous rate limits by `X-Forwarded-For` (only behind your own proxy) |
+| `ALERT_INTERVAL` | `60s` | How often clusters with alerts enabled are scanned (min 15s) |
+| `ALERTS_ALLOW_PRIVATE_WEBHOOKS` | `false` | Let alert webhooks target http:// and private addresses — local testing only |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Browser origins when the UI is on another origin |
 | `K8S_TIMEOUT`, `AI_TIMEOUT`, `TROUBLESHOOT_TIMEOUT`, `DB_CONNECT_TIMEOUT` | `10s`, `90s`, `120s`, `30s` | Timeouts |
 

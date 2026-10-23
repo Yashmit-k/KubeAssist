@@ -310,3 +310,19 @@ func TestLoad_AuthDefaultsAndOverrides(t *testing.T) {
 		t.Error("non-numeric MAX_CLUSTERS_PER_USER must fail")
 	}
 }
+
+func TestLoad_AlertSettings(t *testing.T) {
+	cfg, err := Load()
+	if err != nil || cfg.AlertInterval != time.Minute || cfg.AlertsAllowPrivateWebhooks {
+		t.Fatalf("defaults: %+v %v", cfg, err)
+	}
+	t.Setenv("ALERT_INTERVAL", "5s")
+	if _, err := Load(); err == nil {
+		t.Error("intervals under 15s must be refused")
+	}
+	t.Setenv("ALERT_INTERVAL", "2m")
+	t.Setenv("ALERTS_ALLOW_PRIVATE_WEBHOOKS", "true")
+	if cfg, err := Load(); err != nil || cfg.AlertInterval != 2*time.Minute || !cfg.AlertsAllowPrivateWebhooks {
+		t.Errorf("overrides: %+v %v", cfg, err)
+	}
+}

@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, RouterProvider } from "react-router";
 import Layout from "./components/Layout";
+import Alerts from "./pages/Alerts";
 import Ask from "./pages/Ask";
 import Connect from "./pages/Connect";
 import Dashboard from "./pages/Dashboard";
@@ -38,6 +39,7 @@ const router = createBrowserRouter([
           { path: "pods", element: <Dashboard /> },
           { path: "scan", element: <HealthScan /> },
           { path: "ask", element: <Ask /> },
+          { path: "alerts", element: <Alerts /> },
           { path: "pods/:ns/:name", element: <PodDetail /> },
           { path: "pods/:ns/:name/diagnose", element: <Diagnose /> },
           { path: "history", element: <HistoryList /> },

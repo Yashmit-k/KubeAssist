@@ -63,6 +63,11 @@ services:
       AUTH_DEV_LOGIN: ${AUTH_DEV_LOGIN:-true}
       # nginx (the frontend container) appends the client address.
       TRUST_PROXY_HEADERS: "true"
+      # Alerts: how often clusters with alerts enabled are scanned. The
+      # private-webhook switch lets a webhook point at your machine for
+      # local testing; keep it false anywhere reachable.
+      ALERT_INTERVAL: ${ALERT_INTERVAL:-60s}
+      ALERTS_ALLOW_PRIVATE_WEBHOOKS: ${ALERTS_ALLOW_PRIVATE_WEBHOOKS:-false}
     ports:
       - "8080:8080"
     depends_on:
