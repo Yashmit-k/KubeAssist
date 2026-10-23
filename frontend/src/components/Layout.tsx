@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Boxes, History, LogIn, PlugZap, Server } from "lucide-react";
+import { Boxes, History, LogIn, MessageSquare, PlugZap, Radar, Server } from "lucide-react";
 import { NavLink, Outlet, useNavigate, useParams } from "react-router";
 import { api } from "../lib/api";
 import { LOCAL, useMe, useMyClusters } from "../lib/clusters";
@@ -66,6 +66,8 @@ export default function Layout() {
     ...(base
       ? [
           { to: `${base}/pods`, label: "Pods", icon: Boxes },
+          { to: `${base}/scan`, label: "Health scan", icon: Radar },
+          { to: `${base}/ask`, label: "Ask", icon: MessageSquare },
           { to: `${base}/history`, label: "History", icon: History },
         ]
       : []),

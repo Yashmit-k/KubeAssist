@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, History, Loader2, Stethoscope, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
+import VerifyFix from "../components/VerifyFix";
 import DiagnosisView from "../components/DiagnosisView";
 import RemoteGate from "../components/RemoteGate";
 import { Button, buttonClass, Card, cx, ErrorBox, PageHeader } from "../components/ui";
@@ -173,6 +174,14 @@ export default function Diagnose() {
           {run.result ? (
             <div className="space-y-3">
               <DiagnosisView d={run.result} aiError={run.result.aiError} />
+              {run.result.failureType !== "Healthy" && (
+                <VerifyFix
+                  target={target}
+                  ns={ns}
+                  name={name}
+                  req={{ failureType: run.result.failureType, owner: run.result.detector.fix?.facts?.owner, serviceName: serviceName.trim() || undefined }}
+                />
+              )}
               {run.result.investigationId && (
                 <Link to={`${base}/history/${run.result.investigationId}`} className={buttonClass("ghost", "text-xs")}>
                   <History className="size-3.5" /> Saved to history

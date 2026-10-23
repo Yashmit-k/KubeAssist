@@ -390,3 +390,25 @@ func TestLastErrorLogLine_SkipsKubeletLogErrors(t *testing.T) {
 		t.Errorf("kubelet error must not be quoted, got %q", got)
 	}
 }
+
+// After a node/Docker restart every container restarts once with last
+// termination reason "Unknown". That must not hide a readiness failure,
+// while a real app crash still must.
+func TestDetect_ReadinessFailureSurvivesNodeRestart(t *testing.T) {
+	code := int32(255)
+	snap := func(lastReason string) *model.DiagnosticSnapshot {
+		return &model.DiagnosticSnapshot{
+			Pod:    model.PodInfo{Phase: "Running"},
+			Events: []model.Event{{Reason: "Unhealthy", Message: "Readiness probe failed: HTTP probe failed with statuscode: 404"}},
+			Containers: []model.ContainerInfo{{Name: "web", RestartCount: 5,
+				State:     model.ContainerState{Phase: "running"},
+				LastState: &model.ContainerState{Phase: "terminated", Reason: lastReason, ExitCode: &code}}},
+		}
+	}
+	if got := Detect(snap("Unknown")); got.FailureType != "ReadinessFailure" || !strings.Contains(got.Evidence[1], "5 restarts, all from node/runtime restarts") {
+		t.Errorf("node restart: %+v", got)
+	}
+	if got := Detect(snap("Error")); got.FailureType == "ReadinessFailure" {
+		t.Errorf("app crashes must not be called a readiness failure: %+v", got)
+	}
+}

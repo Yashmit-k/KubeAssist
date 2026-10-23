@@ -1,10 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, RouterProvider } from "react-router";
 import Layout from "./components/Layout";
+import Ask from "./pages/Ask";
 import Connect from "./pages/Connect";
 import Dashboard from "./pages/Dashboard";
 import Diagnose from "./pages/Diagnose";
 import { HistoryList, InvestigationDetail } from "./pages/History";
+import HealthScan from "./pages/HealthScan";
 import Home from "./pages/Home";
 import NotFound from "./pages/NotFound";
 import PodDetail from "./pages/PodDetail";
@@ -34,6 +36,8 @@ const router = createBrowserRouter([
         children: [
           { index: true, element: <Dashboard /> },
           { path: "pods", element: <Dashboard /> },
+          { path: "scan", element: <HealthScan /> },
+          { path: "ask", element: <Ask /> },
           { path: "pods/:ns/:name", element: <PodDetail /> },
           { path: "pods/:ns/:name/diagnose", element: <Diagnose /> },
           { path: "history", element: <HistoryList /> },

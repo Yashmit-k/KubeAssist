@@ -93,6 +93,9 @@ func (s *Server) NewRouter() *http.ServeMux {
 		mux.HandleFunc("POST /api/pods/{ns}/{name}/troubleshoot", local(troubleshoot))
 		mux.HandleFunc("GET /api/pods/{ns}/{name}/troubleshoot/stream", local(stream))
 		mux.HandleFunc("POST /api/pods/{ns}/{name}/troubleshoot/stream", local(stream))
+		mux.HandleFunc("POST /api/pods/{ns}/{name}/verify", local(s.limitScoped(s.TroubleshootLimiter, s.handleVerify)))
+		mux.HandleFunc("POST /api/scan", local(s.limitScoped(s.TroubleshootLimiter, s.handleScan)))
+		mux.HandleFunc("POST /api/chat", local(s.limitScoped(s.TroubleshootLimiter, s.handleChat)))
 		// Local investigation history. Scoped to the local cluster only —
 		// remote clusters' history is behind their owner's session below.
 		mux.HandleFunc("GET /api/investigations", local(s.handleListInvestigations))
@@ -121,6 +124,9 @@ func (s *Server) NewRouter() *http.ServeMux {
 		mux.HandleFunc("GET /api/remote/{clusterId}/pods/{ns}/{name}/logs", remote(s.handlePodLogs))
 		mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/troubleshoot", remote(s.limitScoped(s.TroubleshootLimiter, s.handleTroubleshoot)))
 		mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/troubleshoot/stream", remote(s.limitScoped(s.TroubleshootLimiter, s.handleTroubleshootStream)))
+		mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/verify", remote(s.limitScoped(s.TroubleshootLimiter, s.handleVerify)))
+		mux.HandleFunc("POST /api/remote/{clusterId}/scan", remote(s.limitScoped(s.TroubleshootLimiter, s.handleScan)))
+		mux.HandleFunc("POST /api/remote/{clusterId}/chat", remote(s.limitScoped(s.TroubleshootLimiter, s.handleChat)))
 		mux.HandleFunc("GET /api/remote/{clusterId}/investigations", remote(s.handleListInvestigations))
 		mux.HandleFunc("GET /api/remote/{clusterId}/investigations/{id}", remote(s.handleGetInvestigation))
 	}

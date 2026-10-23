@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { History as HistoryIcon } from "lucide-react";
 import { Link, useParams } from "react-router";
+import type { Snapshot } from "../lib/types";
+import VerifyFix from "../components/VerifyFix";
 import DiagnosisView from "../components/DiagnosisView";
 import RemoteGate from "../components/RemoteGate";
 import { Badge, Card, Confidence, Empty, ErrorBox, PageHeader, Spinner } from "../components/ui";
@@ -76,6 +78,16 @@ export function HistoryList() {
   );
 }
 
+/** The workload a stored snapshot's pod belongs to, for following it to
+ * a replacement pod. Older investigations predate detector.fix. */
+function ownerOf(snap: Snapshot): string | undefined {
+  const fromFix = snap.detector?.fix?.facts?.owner;
+  if (fromFix) return fromFix;
+  if (snap.owners?.deployment?.name) return `deployment/${snap.owners.deployment.name}`;
+  const ref = snap.pod.ownerRefs?.[0];
+  return ref ? `${ref.kind.toLowerCase()}/${ref.name}` : undefined;
+}
+
 export function InvestigationDetail() {
   const { id = "" } = useParams();
   const cluster = useActiveCluster();
@@ -112,8 +124,16 @@ export function InvestigationDetail() {
         }
       />
       <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="space-y-3 lg:col-span-2">
           <DiagnosisView d={d.diagnosis} />
+          {d.diagnosis.failureType !== "Healthy" && (
+            <VerifyFix
+              target={target}
+              ns={d.namespace}
+              name={d.podName}
+              req={{ failureType: d.diagnosis.failureType, owner: ownerOf(snap), serviceName: snap.serviceName ?? undefined }}
+            />
+          )}
         </div>
         <div className="space-y-4">
           {snap.userQuestion && (

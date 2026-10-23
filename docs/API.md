@@ -14,6 +14,9 @@ Every pod route exists in two forms with identical behaviour:
 | `GET\|POST /api/pods/{ns}/{name}/troubleshoot/stream` | `POST /api/remote/{clusterId}/pods/{ns}/{name}/troubleshoot/stream` |
 | `/api/investigations?namespace=&limit=` | `/api/remote/{clusterId}/investigations?...` |
 | `/api/investigations/{id}` | `/api/remote/{clusterId}/investigations/{id}` |
+| `POST /api/scan?namespace=` | `POST /api/remote/{clusterId}/scan?namespace=` |
+| `POST /api/pods/{ns}/{name}/verify` | `POST /api/remote/{clusterId}/pods/{ns}/{name}/verify` |
+| `POST /api/chat` | `POST /api/remote/{clusterId}/chat` |
 
 With `ENABLE_LOCAL_MODE=false` the left column is not registered at all (404).
 Local routes need no sign-in (local mode is single-operator).
@@ -128,6 +131,60 @@ data: { ...same body as POST troubleshoot... }
 
 Failures arrive as `event: error` with `{"code","message"}`. `: keepalive`
 comments are sent every 15 s.
+
+## Health scan
+
+`POST .../scan?namespace=` (namespace optional) checks every pod that isn't cleanly
+Running and Ready (or that has restarts; at most 40), classifies each with the
+detector, plans its fix, and groups pods by **root cause** — the broken thing, not
+the pod — so pods sharing a cause (replicas of one Deployment, or two Deployments
+reading the same missing ConfigMap key) appear once with one fix. No AI call.
+
+```json
+{"namespace":"kubeassist-lab","scannedAt":"...","totalPods":11,"checked":11,"healthy":2,"truncated":false,
+ "groups":[{"key":"configmap-key:kubeassist-lab/application-config/database-url",
+            "title":"ConfigMap \"application-config\" is missing key \"database-url\"",
+            "failureType":"CreateContainerConfigError",
+            "pods":[{"namespace":"kubeassist-lab","name":"missing-config-app-7b9745dbc4-gn9w6","status":"CreateContainerConfigError","ready":"0/1","restartCount":0}],
+            "evidence":["..."], "fix":{"facts":{...},"steps":[...]}}],
+ "errors":[]}
+```
+
+Groups are ordered by number of pods. Rate limited like troubleshoot.
+
+## Verify a fix
+
+`POST .../pods/{ns}/{name}/verify` with `{"failureType": "<before>", "owner": "deployment/api", "serviceName": "..."}`
+(all optional) re-collects the pod — or, when the fix rolled out a new pod, the
+newest pod of `owner` — and compares with the diagnosis the user acted on:
+
+```json
+{"verdict":"still_failing","message":"The new pod \"oom-failure-b6d96d897-rn444\" still shows OOMKilled. ...",
+ "pod":{"name":"oom-failure-b6d96d897-rn444","status":"CrashLoopBackOff","ready":"0/1","restartCount":5},
+ "replaced":true,"failureType":"OOMKilled","evidence":["..."],"fix":{...},"checkedAt":"..."}
+```
+
+`verdict` is `fixed`, `starting` (still coming up, or Running for under 30 s — a
+crash or OOM usually follows within seconds; check again), `still_failing`,
+`new_problem` (with the next fix) or `not_found`. Read-only.
+
+## Chat
+
+`POST .../chat` with `{"messages":[{"role":"user","content":"Why is oom-failure crashing?"}]}`
+(up to 20 text turns, last one from the user) →
+
+```json
+{"reply":"**kubeassist-lab/oom-failure-...**: out of memory (`OOMKilled`) ...","mode":"rules",
+ "tools":[{"name":"diagnose_pod","arguments":{"name":"oom-failure"},"summary":"Diagnosed kubeassist-lab/oom-failure-...: OOMKilled","ok":true}]}
+```
+
+The AI service chooses read-only tools (`scan`, `diagnose_pod`, `get_logs`,
+`list_pods`, `list_namespaces`); the backend runs them against the cluster and
+feeds results back, for at most 4 rounds. With an LLM configured (`mode: "llm"`)
+the model plans and writes the answer; without one (`mode: "rules"`) a keyword
+planner picks one tool and the answer is composed from its result. Pod names may
+be partial; ambiguous names come back as candidates. Needs the AI service (`503
+ai_unavailable` otherwise). Nothing is ever executed on the cluster.
 
 ## Investigation history
 

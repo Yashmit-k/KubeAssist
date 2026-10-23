@@ -1,8 +1,8 @@
-import { AlertTriangle, BookOpen, CheckCircle2, CircleHelp, ExternalLink, PencilLine, RotateCcw, ShieldAlert, Wrench } from "lucide-react";
+import { AlertTriangle, BookOpen, CheckCircle2, CircleHelp, ExternalLink, RotateCcw, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
-import { hasPlaceholder } from "../lib/commands";
 import { failureLabel, failureTone, modeLabel } from "../lib/format";
 import type { Diagnosis } from "../lib/types";
+import FixSteps from "./FixSteps";
 import { Badge, Command, Confidence } from "./ui";
 
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
@@ -63,29 +63,7 @@ export default function DiagnosisView({ d, aiError }: { d: Diagnosis; aiError?: 
       </Section>
 
       <Section icon={<Wrench className="size-3.5" />} title="Fix — run these yourself">
-        <ol className="space-y-3">
-          {steps.map((s) => (
-            <li key={s.order} className="flex gap-3">
-              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-surface-2 text-xs font-semibold text-muted">{s.order}</span>
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <span>{s.description}</span>
-                  {s.isWriteAction && (
-                    <Badge tone="warn" title="This command changes your cluster. Review it before running.">
-                      <ShieldAlert className="size-3" /> changes cluster
-                    </Badge>
-                  )}
-                  {s.command && hasPlaceholder(s.command) && (
-                    <Badge tone="info" title="The highlighted value isn't in the evidence — only you know it. Replace it before running.">
-                      <PencilLine className="size-3" /> fill in highlighted value
-                    </Badge>
-                  )}
-                </div>
-                {s.command && <Command cmd={s.command} write={s.isWriteAction} />}
-              </div>
-            </li>
-          ))}
-        </ol>
+        <FixSteps steps={steps} />
       </Section>
 
       {d.verificationCommands.length > 0 && (

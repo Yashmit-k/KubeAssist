@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { Boxes, RefreshCw, Search, Stethoscope } from "lucide-react";
+import { Boxes, Radar, RefreshCw, Search, Stethoscope } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { api } from "../lib/api";
 import { targetKey, useActiveCluster } from "../lib/clusters";
 import { age, podTone } from "../lib/format";
-import { Badge, Button, Card, cx, Dot, Empty, ErrorBox, PageHeader, Spinner } from "../components/ui";
+import { Badge, Button, buttonClass, Card, cx, Dot, Empty, ErrorBox, PageHeader, Spinner } from "../components/ui";
 import RemoteGate from "../components/RemoteGate";
 
 export default function Dashboard() {
@@ -51,10 +51,15 @@ export default function Dashboard() {
             : cluster.label
         }
         actions={
-          <Button variant="ghost" onClick={() => pods.refetch()} busy={pods.isFetching} title="Refresh">
-            {!pods.isFetching && <RefreshCw className="size-4" />}
-            Refresh
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Link to={`/c/${encodeURIComponent(cluster.key)}/scan`} className={buttonClass(unhealthy ? "primary" : "secondary")}>
+              <Radar className="size-4" /> {unhealthy ? `Find root causes (${unhealthy})` : "Health scan"}
+            </Link>
+            <Button variant="ghost" onClick={() => pods.refetch()} busy={pods.isFetching} title="Refresh">
+              {!pods.isFetching && <RefreshCw className="size-4" />}
+              Refresh
+            </Button>
+          </div>
         }
       />
 
