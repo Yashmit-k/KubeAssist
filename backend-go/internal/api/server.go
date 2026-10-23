@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/ai"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/alerts"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/auth"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/collector"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
@@ -67,6 +68,11 @@ type Server struct {
 	RegisterLimiter     *RateLimiter // POST /api/clusters, per user
 	TroubleshootLimiter *RateLimiter // troubleshoot routes, per user or IP
 	LoginLimiter        *RateLimiter // sign-in endpoints, per IP
+
+	// Alerts watches clusters and notifies their owners; nil disables
+	// the /alerts routes.
+	Alerts        *alerts.Watcher
+	AlertInterval time.Duration
 
 	// TrustProxyHeaders makes rate limiting key anonymous callers by the
 	// X-Forwarded-For address a trusted reverse proxy appended.
@@ -127,6 +133,12 @@ func (s *Server) NewRouter() *http.ServeMux {
 		mux.HandleFunc("POST /api/remote/{clusterId}/pods/{ns}/{name}/verify", remote(s.limitScoped(s.TroubleshootLimiter, s.handleVerify)))
 		mux.HandleFunc("POST /api/remote/{clusterId}/scan", remote(s.limitScoped(s.TroubleshootLimiter, s.handleScan)))
 		mux.HandleFunc("POST /api/remote/{clusterId}/chat", remote(s.limitScoped(s.TroubleshootLimiter, s.handleChat)))
+		if s.Alerts != nil {
+			mux.HandleFunc("GET /api/remote/{clusterId}/alerts", remote(s.handleGetAlerts))
+			mux.HandleFunc("PUT /api/remote/{clusterId}/alerts", remote(s.handlePutAlerts))
+			mux.HandleFunc("DELETE /api/remote/{clusterId}/alerts", remote(s.handleDeleteAlerts))
+			mux.HandleFunc("POST /api/remote/{clusterId}/alerts/test", remote(s.limitScoped(s.TroubleshootLimiter, s.handleTestAlert)))
+		}
 		mux.HandleFunc("GET /api/remote/{clusterId}/investigations", remote(s.handleListInvestigations))
 		mux.HandleFunc("GET /api/remote/{clusterId}/investigations/{id}", remote(s.handleGetInvestigation))
 	}

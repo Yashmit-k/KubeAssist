@@ -138,6 +138,16 @@ type Config struct {
 	RateLimitTroubleshoot string
 	RateLimitLogin        string
 
+	// AlertInterval is how often clusters with alerts enabled are
+	// scanned (ALERT_INTERVAL, minimum 15s).
+	AlertInterval time.Duration
+
+	// AlertsAllowPrivateWebhooks lets alert webhooks target http:// and
+	// private/loopback addresses (ALERTS_ALLOW_PRIVATE_WEBHOOKS=true).
+	// Local development only: in production it would let users make the
+	// server call internal services.
+	AlertsAllowPrivateWebhooks bool
+
 	// TrustProxyHeaders keys anonymous rate limits by X-Forwarded-For.
 	// Enable only when a reverse proxy you control sets that header.
 	TrustProxyHeaders bool
@@ -194,6 +204,8 @@ func Load() (*Config, error) {
 		RateLimitTroubleshoot: getEnvOrDefault("RATE_LIMIT_TROUBLESHOOT", "30/m"),
 		RateLimitLogin:        getEnvOrDefault("RATE_LIMIT_LOGIN", "30/m"),
 		TrustProxyHeaders:     getEnvOrDefault("TRUST_PROXY_HEADERS", "false") == "true",
+
+		AlertsAllowPrivateWebhooks: getEnvOrDefault("ALERTS_ALLOW_PRIVATE_WEBHOOKS", "false") == "true",
 		CORSAllowedOrigins: parseOrigins(getEnvOrDefault(
 			"CORS_ALLOWED_ORIGINS",
 			"http://localhost:5173,http://localhost:3000",
@@ -217,6 +229,11 @@ func Load() (*Config, error) {
 	cfg.DBConnectTimeout, err = getDurationOrDefault("DB_CONNECT_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("config: invalid DB_CONNECT_TIMEOUT: %w", err)
+	}
+
+	cfg.AlertInterval, err = getDurationOrDefault("ALERT_INTERVAL", time.Minute)
+	if err != nil || cfg.AlertInterval < 15*time.Second {
+		return nil, fmt.Errorf("config: ALERT_INTERVAL must be a duration of at least 15s, got %q", os.Getenv("ALERT_INTERVAL"))
 	}
 
 	cfg.SessionTTL, err = getDurationOrDefault("SESSION_TTL", 30*24*time.Hour)

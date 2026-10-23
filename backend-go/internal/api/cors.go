@@ -51,7 +51,7 @@ func NewCORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler 
 			// to the Same-Origin Policy to begin with.
 			if origin != "" && (allowed[origin] || allowed["*"]) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 				// The session cookie must travel on cross-origin calls
 				// when the UI is hosted on a different origin of the same

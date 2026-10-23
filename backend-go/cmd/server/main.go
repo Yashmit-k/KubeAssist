@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/ai"
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/alerts"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/api"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/auth"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/collector"
@@ -140,6 +142,22 @@ func main() {
 		}
 	}
 
+	// Alerts: a background watcher scans clusters whose owners enabled
+	// alerts and posts new/resolved problems to their webhooks.
+	var watcher *alerts.Watcher
+	if hub != nil {
+		var alertStore alerts.Store = alerts.NewMemoryStore()
+		if st != nil {
+			alertStore = st
+		}
+		if cfg.AlertsAllowPrivateWebhooks {
+			log.Println("WARNING: ALERTS_ALLOW_PRIVATE_WEBHOOKS=true — alert webhooks may target http:// and internal addresses. Development only.")
+		}
+		publicURL := strings.TrimRight(cfg.PublicURL, "/")
+		watcher = alerts.NewWatcher(alertStore, nil, alerts.NewSender(cfg.AlertsAllowPrivateWebhooks), cfg.AlertInterval,
+			func(id string) string { return publicURL + "/c/" + id + "/scan" })
+	}
+
 	limiter := func(name, spec string) *api.RateLimiter {
 		l, err := api.ParseRateLimit(spec)
 		if err != nil {
@@ -170,6 +188,8 @@ func main() {
 		TroubleshootLimiter: limiter("RATE_LIMIT_TROUBLESHOOT", cfg.RateLimitTroubleshoot),
 		LoginLimiter:        limiter("RATE_LIMIT_LOGIN", cfg.RateLimitLogin),
 		TrustProxyHeaders:   cfg.TrustProxyHeaders,
+		Alerts:              watcher,
+		AlertInterval:       cfg.AlertInterval,
 	}
 
 	handler := api.NewCORSMiddleware(cfg.CORSAllowedOrigins)(api.RequestLogger(server.NewRouter()))
@@ -188,6 +208,12 @@ func main() {
 	// finish within a bounded window.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	if watcher != nil {
+		watcher.SetScanner(server.AlertScanner())
+		go watcher.Run(ctx)
+		log.Printf("alerts: checking clusters with alerts enabled every %s", cfg.AlertInterval)
+	}
 
 	go func() {
 		log.Printf("KubeAssist backend %s listening on %s", api.Version, httpServer.Addr)

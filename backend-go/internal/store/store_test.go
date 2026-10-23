@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Yashmit-k/KubeAssist/backend-go/internal/alerts"
 	"github.com/Yashmit-k/KubeAssist/backend-go/internal/model"
 )
 
@@ -33,7 +34,7 @@ func openTestStore(t *testing.T) *Store {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `TRUNCATE investigations, clusters, sessions, users;`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `TRUNCATE investigations, alert_configs, clusters, sessions, users;`); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -164,5 +165,42 @@ func TestStore_UsersAndSessions(t *testing.T) {
 	}
 	if got, _ := s.SessionUser(ctx, "live"); got != nil {
 		t.Error("deleted session must not resolve")
+	}
+}
+
+func TestStore_AlertConfigs(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	u, _ := s.UpsertUser(ctx, model.User{Provider: "dev", ProviderUserID: "a", Login: "a"})
+	if err := s.SaveCluster(ctx, "prod", "h", u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := s.GetAlertConfig(ctx, "prod"); c != nil || err != nil {
+		t.Fatalf("no config yet: %+v %v", c, err)
+	}
+	cfg := alerts.Config{ClusterID: "prod", OwnerID: u.ID, Kind: alerts.KindSlack, URL: "https://hooks.slack.com/x", Enabled: true}
+	if err := s.PutAlertConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Kind, cfg.Enabled = alerts.KindDiscord, false
+	if err := s.PutAlertConfig(ctx, cfg); err != nil { // upsert
+		t.Fatal(err)
+	}
+	got, err := s.GetAlertConfig(ctx, "prod")
+	if err != nil || got == nil || got.Kind != alerts.KindDiscord || got.Enabled || got.OwnerID != u.ID || got.UpdatedAt.IsZero() {
+		t.Fatalf("got %+v %v", got, err)
+	}
+	if all, _ := s.ListAlertConfigs(ctx); len(all) != 1 {
+		t.Errorf("list = %+v", all)
+	}
+	// Revoking the cluster removes its alert config with it.
+	if err := s.DeleteCluster(ctx, "prod"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := s.GetAlertConfig(ctx, "prod"); c != nil {
+		t.Errorf("config must cascade with the cluster: %+v", c)
+	}
+	if err := s.PutAlertConfig(ctx, alerts.Config{ClusterID: "ghost", OwnerID: u.ID, Kind: "slack", URL: "x"}); err == nil {
+		t.Error("a config for an unregistered cluster must be rejected")
 	}
 }

@@ -8,6 +8,8 @@ import type {
   RegisteredCluster,
   Snapshot,
   StageEvent,
+  AlertConfig,
+  AlertKind,
   ChatMessage,
   ChatReply,
   ScanResult,
@@ -98,6 +100,13 @@ export const api = {
   /** Health scan: classify every unhealthy pod and group by root cause. */
   scan: (t: ClusterTarget, namespace?: string) =>
     request<ScanResult>(`${prefix(t)}/scan${namespace ? `?namespace=${enc(namespace)}` : ""}`, { method: "POST" }),
+  /** Alerts for a connected cluster (owner only). */
+  alerts: (clusterId: string) => request<AlertConfig>(`/api/remote/${enc(clusterId)}/alerts`),
+  saveAlerts: (clusterId: string, body: { kind: AlertKind; url?: string; enabled: boolean }) =>
+    request<AlertConfig>(`/api/remote/${enc(clusterId)}/alerts`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteAlerts: (clusterId: string) => request<void>(`/api/remote/${enc(clusterId)}/alerts`, { method: "DELETE" }),
+  testAlert: (clusterId: string) => request<{ ok: boolean; error?: string }>(`/api/remote/${enc(clusterId)}/alerts/test`, { method: "POST" }),
+
   /** Ask about the cluster: the AI picks read-only tools, the backend runs them. */
   chat: (t: ClusterTarget, messages: ChatMessage[]) =>
     request<ChatReply>(`${prefix(t)}/chat`, { method: "POST", body: JSON.stringify({ messages }) }),

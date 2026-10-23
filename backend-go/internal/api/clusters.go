@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -110,6 +111,12 @@ func (s *Server) handleRevokeCluster(w http.ResponseWriter, r *http.Request, _ c
 	if err := s.Hub.RevokeCluster(clusterID); err != nil {
 		writeError(w, http.StatusInternalServerError, "revoke_failed", err.Error())
 		return
+	}
+	if s.Alerts != nil {
+		if err := s.Alerts.Store().DeleteAlertConfig(r.Context(), clusterID); err != nil {
+			log.Printf("api: deleting alert config of revoked cluster %q: %v", clusterID, err)
+		}
+		s.Alerts.Reset(clusterID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
