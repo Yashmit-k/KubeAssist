@@ -5,7 +5,9 @@ import { Link } from "react-router";
 import FixSteps from "../components/FixSteps";
 import RemoteGate from "../components/RemoteGate";
 import { Badge, Button, buttonClass, Card, Empty, ErrorBox, PageHeader } from "../components/ui";
+import ReportButtons from "../components/ReportButtons";
 import { VerifyOutcome } from "../components/VerifyFix";
+import { reportFileName, scanReport } from "../lib/report";
 import { api, type ClusterTarget } from "../lib/api";
 import { targetKey, useActiveCluster } from "../lib/clusters";
 import { dateTime, failureLabel, failureTone } from "../lib/format";
@@ -192,6 +194,10 @@ export default function HealthScan() {
             <Stat label="unhealthy pods" value={broken} tone={broken ? "bad" : "ok"} />
             <Stat label="root causes" value={r.groups.length} tone={r.groups.length ? "bad" : "ok"} />
             <Stat label="checked, turned out fine" value={r.healthy} />
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm text-muted">Scan report</span>
+            <ReportButtons filename={reportFileName(cluster.key, "health-scan", r.scannedAt.slice(0, 16))} markdown={scanReport({ cluster: cluster.label, scan: r })} />
           </div>
           <p className="text-xs text-muted">
             Scanned {r.namespace ? `namespace ${r.namespace}` : "all namespaces"} at {dateTime(r.scannedAt)}.

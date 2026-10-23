@@ -239,6 +239,35 @@
         }
       }
     },
+    "rollout": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Owning Deployment's revision history relative to this pod (Go collector). Env values of sensitive-looking names are never included.",
+      "required": ["workload", "revision", "rolledOutAt", "latest", "changes"],
+      "properties": {
+        "workload": { "type": "string" },
+        "revision": { "type": "integer" },
+        "rolledOutAt": { "type": "string", "format": "date-time" },
+        "latest": { "type": "boolean" },
+        "previousRevision": { "type": "integer" },
+        "previousCreatedAt": { "type": "string", "format": "date-time" },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["field"],
+            "properties": {
+              "field": { "type": "string" },
+              "container": { "type": "string" },
+              "name": { "type": "string" },
+              "from": { "type": "string" },
+              "to": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
     "related": {
       "type": "object",
       "additionalProperties": false,

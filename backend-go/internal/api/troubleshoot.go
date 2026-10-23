@@ -87,7 +87,7 @@ func (s *Server) runTroubleshoot(ctx context.Context, src clusterSource, cluster
 		}
 	}
 
-	snapshot.Detector.Fix = detect.PlanFix(snapshot)
+	detect.Enrich(snapshot)
 	snapshot.UserQuestion = req.Question
 	redact.Snapshot(snapshot)
 

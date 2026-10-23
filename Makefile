@@ -69,12 +69,18 @@ dev-web: frontend/node_modules ## Vite dev server on :5173 (proxies /api to :808
 
 # ---- Kind lab ------------------------------------------------------------
 
-.PHONY: kind lab lab-clean agent-kind
+.PHONY: kind lab lab-rollout lab-clean agent-kind
 kind: ## Create the Kind cluster if it doesn't exist
 	@kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --name $(KIND_CLUSTER)
 
 lab: ## Deploy the broken lab workloads (namespace kubeassist-lab)
 	kubectl --context kind-$(KIND_CLUSTER) apply -f deploy/lab/
+
+lab-rollout: ## Bad-rollout scenario: deploy a working revision, then a release that breaks it
+	kubectl --context kind-$(KIND_CLUSTER) apply -f deploy/lab/00-namespace.yaml
+	kubectl --context kind-$(KIND_CLUSTER) apply -f deploy/lab-rollout/v1.yaml
+	kubectl --context kind-$(KIND_CLUSTER) -n kubeassist-lab rollout status deployment/bad-rollout --timeout=120s
+	kubectl --context kind-$(KIND_CLUSTER) apply -f deploy/lab-rollout/v2.yaml
 
 lab-clean: ## Remove the lab workloads
 	kubectl --context kind-$(KIND_CLUSTER) delete namespace kubeassist-lab --ignore-not-found

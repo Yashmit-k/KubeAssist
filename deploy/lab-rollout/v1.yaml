@@ -1,0 +1,34 @@
+# Bad-rollout scenario, revision 1: works. `make lab-rollout` applies this,
+# waits for it to be healthy, then applies v2.yaml, which breaks it.
+# Expected after v2: CrashLoopBackOff, with KubeAssist pointing at the
+# rollout (image, MODE and command changed) and offering a rollback.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-rollout
+  namespace: kubeassist-lab
+  labels:
+    app: bad-rollout
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bad-rollout
+  template:
+    metadata:
+      labels:
+        app: bad-rollout
+    spec:
+      containers:
+        - name: application
+          image: busybox:1.36
+          env:
+            - name: MODE
+              value: safe
+          command: ["sh", "-c", "echo \"started in $MODE mode\"; sleep 3600000"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi

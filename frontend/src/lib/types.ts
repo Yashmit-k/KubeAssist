@@ -143,6 +143,19 @@ export type VerifyResult = {
   checkedAt: string;
 };
 
+export type TemplateChange = { field: string; container?: string; name?: string; from?: string; to?: string };
+
+/** The owning Deployment's revision history relative to a pod. */
+export type Rollout = {
+  workload: string;
+  revision: number;
+  rolledOutAt: string;
+  latest: boolean;
+  previousRevision?: number;
+  previousCreatedAt?: string | null;
+  changes: TemplateChange[];
+};
+
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export type ChatToolUse = { name: string; arguments: Record<string, unknown>; summary: string; ok: boolean };
@@ -174,6 +187,7 @@ export type Snapshot = {
     services?: { name: string; selector: Record<string, string>; endpointsReady: number }[];
     configMapRefs?: { name: string; keysPresent?: string[]; keysMissing?: string[] }[];
   };
+  rollout?: Rollout | null;
   detector: DetectorResult;
   userQuestion?: string;
   serviceName?: string | null;

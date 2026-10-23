@@ -132,6 +132,24 @@ data: { ...same body as POST troubleshoot... }
 Failures arrive as `event: error` with `{"code","message"}`. `: keepalive`
 comments are sent every 15 s.
 
+## What changed (rollout timeline)
+
+For a pod owned by a Deployment, the snapshot includes `rollout`: the revision the
+pod runs, when it last went live (`rolledOutAt`), whether it is the newest
+revision, and the pod-template diff from the previous revision (images,
+command/args, env, resources, probes, volumes, service account). Env values of
+sensitive-looking names (`*PASS*`, `*TOKEN*`, `*SECRET*`, `*KEY*`, …) are never
+included — only that they changed.
+
+When the failing pod runs the newest revision, rolled out within 7 days with
+template changes, the diagnosis gains an evidence line ("Runs revision 4 of
+deployment/x, rolled out 2m ago; changed from revision 3: image … → …") and a
+final fix step `kubectl rollout undo deployment/x -n ns --to-revision=3`.
+`make lab-rollout` deploys a lab Deployment whose second revision breaks it.
+
+The UI exports any diagnosis (with its latest verify result) or scan as a
+Markdown incident report; that is client-side only.
+
 ## Health scan
 
 `POST .../scan?namespace=` (namespace optional) checks every pod that isn't cleanly

@@ -60,9 +60,21 @@ export function VerifyOutcome({ r }: { r: VerifyResult }) {
 
 /** "Did it work?" — after running the fix, re-check the pod (or the
  * new pod its workload rolled out) and compare with the diagnosis. */
-export default function VerifyFix({ target, ns, name, req }: { target: ClusterTarget; ns: string; name: string; req: VerifyRequest }) {
+export default function VerifyFix({
+  target,
+  ns,
+  name,
+  req,
+  onResult,
+}: {
+  target: ClusterTarget;
+  ns: string;
+  name: string;
+  req: VerifyRequest;
+  onResult?: (r: VerifyResult) => void;
+}) {
   const autoChecks = useRef(0);
-  const check = useMutation({ mutationFn: () => api.verify(target, ns, name, req) });
+  const check = useMutation({ mutationFn: () => api.verify(target, ns, name, req), onSuccess: (r) => onResult?.(r) });
   const { mutate } = check;
 
   useEffect(() => {

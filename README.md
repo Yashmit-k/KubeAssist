@@ -39,6 +39,7 @@ Open **http://localhost:3000**, pick a pod in `kubeassist-lab`, click **Diagnose
 To try the multi-tenant agent flow against the same Kind cluster:
 
 ```bash
+make lab-rollout # optional: a Deployment whose second revision breaks it (rollout timeline demo)
 make agent-kind  # builds the agent, loads it into Kind, registers "kind-dev" as user "dev", deploys it
 ```
 

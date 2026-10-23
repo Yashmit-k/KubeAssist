@@ -95,3 +95,18 @@ def test_llm_answer_using_fix_is_kept(snapshots, built_index, live_llm):  # noqa
     out = asyncio.run(run_troubleshoot(snap, built_index))
     assert commands(out) == [fix_cmd]
     assert settings.llm_mock is False
+
+
+def test_rollout_reaches_the_llm_evidence_and_schema(snapshots):
+    from app.schema_util import validate_snapshot
+
+    snap = copy.deepcopy(snapshots["crashloop-app"])
+    snap["rollout"] = {
+        "workload": "deployment/crashloop-app", "revision": 2, "rolledOutAt": "2026-10-24T11:56:00Z", "latest": True,
+        "previousRevision": 1, "previousCreatedAt": "2026-10-21T12:00:00Z",
+        "changes": [{"field": "image", "container": "application", "from": "busybox:1.36", "to": "busybox:1.37"}],
+    }
+    assert not validate_snapshot(snap)
+    text = format_evidence(snap)
+    assert "RECENT ROLLOUT deployment/crashloop-app: pod runs revision 2" in text
+    assert "image [application]: busybox:1.36 -> busybox:1.37" in text

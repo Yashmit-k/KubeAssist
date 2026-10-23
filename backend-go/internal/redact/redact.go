@@ -94,6 +94,12 @@ func Snapshot(s *model.DiagnosticSnapshot) *model.DiagnosticSnapshot {
 	for i := range s.Detector.RelatedHints {
 		s.Detector.RelatedHints[i] = Text(s.Detector.RelatedHints[i])
 	}
+	if ro := s.Rollout; ro != nil {
+		for i := range ro.Changes {
+			ro.Changes[i].From = Text(ro.Changes[i].From)
+			ro.Changes[i].To = Text(ro.Changes[i].To)
+		}
+	}
 	if f := s.Detector.Fix; f != nil {
 		for k, v := range f.Facts {
 			f.Facts[k] = Text(v)

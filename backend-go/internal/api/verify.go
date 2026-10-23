@@ -97,7 +97,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request, src cluste
 			snap.Detector = detect.DetectRelated(snap, core)
 		}
 	}
-	snap.Detector.Fix = detect.PlanFix(snap)
+	detect.Enrich(snap)
 	redact.Snapshot(snap)
 
 	d := snap.Detector

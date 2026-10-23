@@ -116,7 +116,7 @@ func runScan(ctx context.Context, src clusterSource, namespace string) (*scanRes
 				return nil
 			}
 			snap.Detector = detect.Detect(snap)
-			snap.Detector.Fix = detect.PlanFix(snap)
+			detect.Enrich(snap)
 			redact.Snapshot(snap)
 			findings = append(findings, finding{p, snap})
 			return nil

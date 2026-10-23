@@ -3,6 +3,7 @@ import { RefreshCw, ScrollText, Stethoscope } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import RemoteGate from "../components/RemoteGate";
+import RolloutCard from "../components/RolloutCard";
 import { Badge, buttonClass, Card, CopyButton, cx, Empty, ErrorBox, PageHeader, Spinner } from "../components/ui";
 import { api, type ClusterTarget } from "../lib/api";
 import { targetKey, useActiveCluster } from "../lib/clusters";
@@ -214,6 +215,8 @@ export default function PodDetail() {
             </div>
           )}
         </Card>
+
+        {s.rollout && <RolloutCard r={s.rollout} namespace={s.pod.namespace} failing={det.failureType !== "Healthy"} />}
 
         {s.initContainers && s.initContainers.length > 0 && <ContainersTable title="Init containers" containers={s.initContainers} />}
         {s.containers.length > 0 ? (
