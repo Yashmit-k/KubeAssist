@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { CircleCheck, Radar, RefreshCw, Stethoscope } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
+import AgentWaiting from "../components/AgentWaiting";
 import FixSteps from "../components/FixSteps";
 import RemoteGate from "../components/RemoteGate";
 import { Badge, Button, buttonClass, Card, Empty, ErrorBox, PageHeader } from "../components/ui";
@@ -9,7 +10,7 @@ import ReportButtons from "../components/ReportButtons";
 import { VerifyOutcome } from "../components/VerifyFix";
 import { reportFileName, scanReport } from "../lib/report";
 import { api, type ClusterTarget } from "../lib/api";
-import { targetKey, useActiveCluster } from "../lib/clusters";
+import { targetKey, useActiveCluster, useAgentWait } from "../lib/clusters";
 import { dateTime, failureLabel, failureTone } from "../lib/format";
 import type { ScanGroup, VerifyResult } from "../lib/types";
 
@@ -142,6 +143,10 @@ export default function HealthScan() {
     enabled: !!target,
   });
   const scan = useMutation({ mutationFn: () => api.scan(target!, namespace || undefined) });
+  // A scan that failed only because the agent was away re-runs itself.
+  const waiting = useAgentWait(target, [namespaces.error, scan.error], () => {
+    if (scan.isError) scan.mutate();
+  });
 
   if (!target) return <RemoteGate clusterId={cluster.key} />;
   const base = `/c/${encodeURIComponent(cluster.key)}`;
@@ -176,7 +181,13 @@ export default function HealthScan() {
         }
       />
 
-      {scan.isError && <ErrorBox error={scan.error} title="Scan failed" />}
+      {waiting ? (
+        <div className="mb-4">
+          <AgentWaiting clusterId={cluster.key} />
+        </div>
+      ) : (
+        scan.isError && <ErrorBox error={scan.error} title="Scan failed" />
+      )}
 
       {!r && !scan.isPending && !scan.isError && (
         <Card>

@@ -2,11 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, ScrollText, Stethoscope } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
+import AgentWaiting from "../components/AgentWaiting";
 import RemoteGate from "../components/RemoteGate";
 import RolloutCard from "../components/RolloutCard";
 import { Badge, buttonClass, Card, CopyButton, cx, Empty, ErrorBox, PageHeader, Spinner } from "../components/ui";
 import { api, type ClusterTarget } from "../lib/api";
-import { targetKey, useActiveCluster } from "../lib/clusters";
+import { targetKey, useActiveCluster, useAgentWait } from "../lib/clusters";
 import { age, failureLabel, failureTone } from "../lib/format";
 import type { ContainerInfo, ContainerState, Snapshot } from "../lib/types";
 
@@ -87,6 +88,7 @@ function LogsCard({ target, ns, name, snap }: { target: ClusterTarget; ns: strin
     enabled: !!container,
     retry: false,
   });
+  const logsWaiting = useAgentWait(target, [logs.error]);
 
   if (!all.length) return null;
   const text = logs.data?.logs ?? "";
@@ -123,6 +125,10 @@ function LogsCard({ target, ns, name, snap }: { target: ClusterTarget; ns: strin
         <div className="p-4">
           <Spinner label="Fetching logs…" />
         </div>
+      ) : logsWaiting ? (
+        <div className="p-4">
+          <AgentWaiting clusterId={target.kind === "remote" ? target.clusterId : ""} />
+        </div>
       ) : logs.isError ? (
         <div className="p-4">
           <ErrorBox error={logs.error} />
@@ -146,6 +152,7 @@ export default function PodDetail() {
     enabled: !!target,
     refetchInterval: 20_000,
   });
+  const waiting = useAgentWait(target, [snap.error]);
 
   if (!target) return <RemoteGate clusterId={cluster.key} />;
   const base = `/c/${encodeURIComponent(cluster.key)}`;
@@ -166,7 +173,7 @@ export default function PodDetail() {
     return (
       <>
         <PageHeader title={name} crumbs={crumbs} />
-        <ErrorBox error={snap.error} title="Could not load this pod" />
+        {waiting ? <AgentWaiting clusterId={cluster.key} /> : <ErrorBox error={snap.error} title="Could not load this pod" />}
       </>
     );
   const s = snap.data!;
