@@ -11,15 +11,14 @@ import HealthScan from "./pages/HealthScan";
 import Home from "./pages/Home";
 import NotFound from "./pages/NotFound";
 import PodDetail from "./pages/PodDetail";
-import { ApiError } from "./lib/api";
+import { shouldRetry } from "./lib/api";
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 5_000,
       refetchOnWindowFocus: false,
-      // Don't hammer the API with retries for client errors (401/404).
-      retry: (count, err) => !(err instanceof ApiError && err.status >= 400 && err.status < 500) && count < 2,
+      retry: shouldRetry,
     },
   },
 });

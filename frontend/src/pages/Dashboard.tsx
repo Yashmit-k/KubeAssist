@@ -3,9 +3,10 @@ import { Boxes, Radar, RefreshCw, Search, Stethoscope } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { api } from "../lib/api";
-import { targetKey, useActiveCluster } from "../lib/clusters";
+import { targetKey, useActiveCluster, useAgentWait } from "../lib/clusters";
 import { age, podTone } from "../lib/format";
 import { Badge, Button, buttonClass, Card, cx, Dot, Empty, ErrorBox, PageHeader, Spinner } from "../components/ui";
+import AgentWaiting from "../components/AgentWaiting";
 import RemoteGate from "../components/RemoteGate";
 
 export default function Dashboard() {
@@ -27,6 +28,7 @@ export default function Dashboard() {
     enabled: !!target,
     refetchInterval: 15_000,
   });
+  const waiting = useAgentWait(target, [pods.error, namespaces.error]);
 
   const rows = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -96,6 +98,10 @@ export default function Dashboard() {
         {pods.isLoading ? (
           <div className="p-6">
             <Spinner label="Loading pods…" />
+          </div>
+        ) : waiting ? (
+          <div className="p-4">
+            <AgentWaiting clusterId={cluster.key} />
           </div>
         ) : pods.isError ? (
           <div className="p-4">

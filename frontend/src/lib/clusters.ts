@@ -1,6 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { useParams } from "react-router";
-import { api, type ClusterTarget } from "./api";
+import { api, isAgentNotConnected, type ClusterTarget } from "./api";
 import type { ClusterStatus, User } from "./types";
 
 /**
@@ -50,4 +51,41 @@ export function useActiveCluster(): ActiveCluster {
 /** Stable query-key fragment for a target. */
 export function targetKey(t: ClusterTarget | null): string {
   return !t ? "none" : t.kind === "local" ? LOCAL : `remote:${t.clusterId}`;
+}
+
+/** How often to check a remote cluster's status while its agent is away. */
+export const AGENT_POLL_MS = 3000;
+
+/**
+ * Recovers a page whose requests failed because the remote cluster's
+ * agent isn't connected (503 agent_not_connected). While any of `errors`
+ * is that error, polls the cluster's status; once it reports connected,
+ * refetches every query of this target and calls `onConnected` (to
+ * re-run a mutation, say). Returns whether the page is waiting.
+ */
+export function useAgentWait(target: ClusterTarget | null, errors: unknown[], onConnected?: () => void): boolean {
+  const qc = useQueryClient();
+  const clusterId = target?.kind === "remote" ? target.clusterId : null;
+  const waiting = !!clusterId && errors.some(isAgentNotConnected);
+  const status = useQuery({
+    queryKey: ["remote-status", clusterId],
+    queryFn: () => api.remoteStatus(clusterId!),
+    enabled: waiting,
+    refetchInterval: waiting ? AGENT_POLL_MS : false,
+    retry: false,
+  });
+  const cb = useRef(onConnected);
+  cb.current = onConnected;
+
+  const key = targetKey(target);
+  const connected = !!status.data?.connected;
+  // Keyed on dataUpdatedAt so that if the agent dropped again before our
+  // refetch landed, the next connected poll tries once more.
+  useEffect(() => {
+    if (!waiting || !connected) return;
+    void qc.invalidateQueries({ predicate: (q) => q.queryKey[1] === key });
+    cb.current?.();
+  }, [waiting, connected, status.dataUpdatedAt, qc, key]);
+
+  return waiting;
 }

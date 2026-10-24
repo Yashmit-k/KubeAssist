@@ -2,10 +2,11 @@ import { useMutation } from "@tanstack/react-query";
 import { Bot, CircleAlert, Eye, Send, User as UserIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useHealth } from "../components/Layout";
+import AgentWaiting from "../components/AgentWaiting";
 import RemoteGate from "../components/RemoteGate";
 import { Badge, Button, Command, cx, ErrorBox, PageHeader } from "../components/ui";
 import { api } from "../lib/api";
-import { useActiveCluster } from "../lib/clusters";
+import { useActiveCluster, useAgentWait } from "../lib/clusters";
 import { isWriteCommand, parseMarkdown, type Inline } from "../lib/markdown";
 import type { ChatMessage, ChatToolUse } from "../lib/types";
 
@@ -109,6 +110,10 @@ export default function Ask() {
     mutationFn: (history: ChatMessage[]) => api.chat(target!, history),
     onSuccess: (r) => setTurns((t) => [...t, { role: "assistant", content: r.reply, tools: r.tools, mode: r.mode }]),
   });
+  // A question that failed only because the agent was away is re-sent.
+  const waiting = useAgentWait(target, [send.error], () => {
+    if (send.isError && send.variables) send.mutate(send.variables);
+  });
 
   // Block body on purpose: newer browsers return a Promise from
   // scrollIntoView, and React would call an effect's return value as its
@@ -185,7 +190,7 @@ export default function Ask() {
             <p className="animate-pulse text-sm text-muted">Looking at the cluster…</p>
           </Bubble>
         )}
-        {send.isError && <ErrorBox error={send.error} title="Couldn't answer" />}
+        {waiting ? <AgentWaiting clusterId={cluster.key} /> : send.isError && <ErrorBox error={send.error} title="Couldn't answer" />}
         <div ref={end} />
       </div>
 

@@ -38,6 +38,22 @@ export class ApiError extends Error {
   }
 }
 
+/** The remote cluster's agent isn't connected to the relay (yet). */
+export function isAgentNotConnected(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 503 && err.code === "agent_not_connected";
+}
+
+/**
+ * Query retry policy: client errors (401/404/...) won't change on retry,
+ * and a missing agent is handled by useAgentWait, which polls the
+ * cluster's status instead. Everything else gets two retries.
+ */
+export function shouldRetry(failureCount: number, err: unknown): boolean {
+  if (err instanceof ApiError && err.status >= 400 && err.status < 500) return false;
+  if (isAgentNotConnected(err)) return false;
+  return failureCount < 2;
+}
+
 /**
  * A ClusterTarget is where a request goes: this backend's own cluster
  * ("local", under /api) or a remote cluster reached through its agent
